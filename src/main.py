@@ -3,8 +3,42 @@ import requests
 from enum import Enum
 from dotenv import load_dotenv
 from requests import Response
+from pydantic import BaseModel, Field
 
 load_dotenv()
+
+
+# Helper classes and functions
+class InputData(BaseModel):
+    """
+    Represents input data required for flight planning.
+
+    Attributes:
+        departure_airfield (str): The ICAO code of the departure airfield. Must be exactly 4 alphabetical characters.
+        arrival_airfield (str): The ICAO code of the arrival airfield. Must be exactly 4 alphabetical characters.
+        aircraft_type (str): The aircraft type identifier. Must be at least 4 characters long.
+    """
+    departure_airfield: str = Field(min_length=4, max_length=4, pattern=r'^[A-Za-z]{4}$')
+    arrival_airfield: str = Field(min_length=4, max_length=4, pattern=r'^[A-Za-z]{4}$')
+    aircraft_type: str = Field(min_length=4)
+
+
+def get_input() -> InputData:
+    """
+    Prompts the user to enter flight planning data via standard input.
+
+    Returns:
+        InputData: A validated instance containing the departure airfield, arrival airfield, and aircraft type.
+
+    Notes:
+        - ICAO codes are automatically converted to uppercase.
+        - Raises a ValidationError if the input does not meet the model's constraints.
+    """
+    return InputData(
+        departure_airfield=input("Departure airfield ICAO code: ").upper(),
+        arrival_airfield=input("Arrival airfield ICAO code: ").upper(),
+        aircraft_type=input("Aircraft type: "),
+    )
 
 
 # Basic classes
@@ -67,8 +101,24 @@ class ApiClient:
 def main():
     airfield_api = ApiClient(api_url_key=ApiUrlKey.AIRFIELD.value)
     weather_api = ApiClient(api_url_key=ApiUrlKey.WEATHER.value)
-    print(airfield_api.load_data(ids="epwa", format="json").json())
-    print(weather_api.load_data(ids="epkk"))
+    data_inputs = get_input()
+    print(f"Departure airfield: {airfield_api.load_data(
+        ids=data_inputs.departure_airfield, 
+        format="json").json()}",
+        )
+    print(f"Departure WX: {weather_api.load_data(
+        ids=data_inputs.departure_airfield, 
+        format="json").json()}",
+        )
+    print(f"Arrival airfield: {airfield_api.load_data(
+        ids=data_inputs.arrival_airfield, 
+        format="json").json()}",
+        )
+    print(f"Arrival WX: {weather_api.load_data(
+        ids=data_inputs.arrival_airfield,
+        format="json").json()}",
+        )
+    print(f"Aircraft: {data_inputs.aircraft_type}")
 
 
 if __name__ == "__main__":
