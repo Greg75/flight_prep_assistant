@@ -86,8 +86,8 @@ class AircraftModel(BaseModel):
     Attributes:
         type (str): Aircraft type or model name.
         mtow (int): Maximum takeoff weight in kilograms or pounds.
-        takeoff_distance_at_sea_level (int): Required takeoff distance at sea level under standard conditions, in meters or feet.
-        landing_distance_at_sea_level (int): Required landing distance at sea level under standard conditions, in meters or feet.
+        takeoff_distance_at_sea_level (int): Required takeoff distance at sea level under standard conditions [m / ft].
+        landing_distance_at_sea_level (int): Required landing distance at sea level under standard conditions [m / ft].
         stall_speed (int): Stall speed of the aircraft in knots.
         xwind_max_speed (float): Maximum crosswind speed the aircraft can handle, in knots.
     """
