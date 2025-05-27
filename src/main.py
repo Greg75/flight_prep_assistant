@@ -113,7 +113,9 @@ class InputData(BaseModel):
     departure_airfield: str = Field(
         min_length=4, max_length=4, pattern=r"^[A-Za-z]{4}$"
     )
-    arrival_airfield: str = Field(min_length=4, max_length=4, pattern=r"^[A-Za-z]{4}$")
+    arrival_airfield: str = Field(
+        min_length=4, max_length=4, pattern=r"^[A-Za-z]{4}$"
+    )
     aircraft_data: AircraftModel
 
 
@@ -268,9 +270,7 @@ class AirfieldModelBuilder:
         """
         self.airfield_records = {}
 
-    def add_airfield_data(
-        self, airfield_api: ApiClient, params: AirfieldParams
-    ) -> Self:
+    def add_airfield_data(self, airfield_api: ApiClient, params: AirfieldParams) -> Self:
         """
         Loads airfield data from the provided API and updates internal records.
 
