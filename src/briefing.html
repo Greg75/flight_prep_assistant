@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Airfield Briefing - {{ icaoId }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 30px; }
+    h1, h2 { text-align: center; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th, td { border: 1px solid #ccc; padding: 8px; }
+    .label { font-weight: bold; }
+    .metar-taf { margin-top: 10px; padding: 10px; background: #eee; }
+  </style>
+</head>
+<body>
+
+<h1>Airfield Briefing</h1>
+
+<p><span class="label">ICAO Code:</span> {{ icaoId }}</p>
+<p><span class="label">Elevation:</span> {{ elevation }} ft</p>
+<p><span class="label">Temperature:</span> {{ temperature }} °C</p>
+<p><span class="label">Wind:</span> {{ wind.direction }}° / {{ wind.speed }} kt</p>
+
+<h2>Runways</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Direction</th>
+      <th>Length (ft)</th>
+      <th>Width (ft)</th>
+      <th>Surface</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in runway %}
+    <tr>
+      <td>{{ r.direction }}</td>
+      <td>{{ r.length }}</td>
+      <td>{{ r.width }}</td>
+      <td>{{ r.surface }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>Frequencies</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Service</th>
+      <th>Frequency (MHz)</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for key, value in frequency.items() %}
+    <tr>
+      <td>{{ key|upper }}</td>
+      <td>{{ value }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>Meteorological</h2>
+<p class="label">METAR:</p>
+<div class="metar-taf">{{ metar }}</div>
+<p class="label">TAF:</p>
+<div class="metar-taf">{{ taf }}</div>
+
+</body>
+</html>

@@ -4,6 +4,9 @@ from enum import Enum
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from typing import List, Self, Optional
+from weasyprint import HTML
+from jinja2 import Environment, FileSystemLoader
+from pathlib import Path
 
 load_dotenv()
 
@@ -184,6 +187,15 @@ def get_input() -> InputData:
         arrival_airfield=arrival_airfield,
         aircraft_data=aircraft_data,
     )
+
+
+def generate_briefing(data: AirfieldModel, output_path: str = "briefing.pdf") -> HTML:
+    template_dir = Path(__file__).parent
+    environment = Environment(loader=FileSystemLoader(template_dir))
+    template = environment.get_template("briefing.html")
+
+    html_output = template.render(data)
+    return HTML(string=html_output).write_pdf(output_path)
 
 
 class AirfieldModelFacade:
@@ -434,13 +446,20 @@ def main():
         weather_api=weather_api, params=arrival_params
     )
 
+    # Airfields data
+    departure_airfield_data = departure_airfield_model_builder.build()
+    arrival_airfield_data = arrival_airfield_model_builder.build()
+
     # Prints the output
     print(50 * "-")
-    print(f"Departure airfield data: {departure_airfield_model_builder.build()}.")
-    print(f"Arrival airfield data: {arrival_airfield_model_builder.build()}.")
+    print(f"Departure airfield data: {departure_airfield_data}.")
+    print(f"Arrival airfield data: {arrival_airfield_data}.")
     print(f"Aircraft data: {data_inputs.aircraft_data.model_dump()}.")
     print(f"Aircraft data fetched from API: {aircraft_api.load_data(aircraft_params)}.")
     print(50 * "-")
+
+    # Generate PDF briefing
+    generate_briefing(data=departure_airfield_data)
 
 
 if __name__ == "__main__":
