@@ -7,6 +7,8 @@ from typing import List, Self, Optional
 from weasyprint import HTML
 from jinja2 import Environment, FileSystemLoader
 from pathlib import Path
+from datetime import datetime
+from typing import Literal
 
 load_dotenv()
 
@@ -103,6 +105,29 @@ class AircraftModel(BaseModel):
     xwind_max_speed: float
 
 
+class Briefing(BaseModel):
+    """
+    Represents a comprehensive preflight briefing for a pilot.
+
+    This model includes key data about the aircraft, departure and arrival airfields,
+    and a recommendation based on current flight conditions (e.g., weather, suitability).
+
+    Attributes:
+        aircraft (AircraftModel): Information about the aircraft used for the flight.
+        departure_airfield (AirfieldModel): Data about the departure airfield, including weather.
+        arrival_airfield (AirfieldModel): Data about the arrival airfield, including weather.
+        recommendation (Literal["NO GO", "GO IFR", "GO VFR"]): Flight recommendation based on the briefing.
+            - "NO GO": Flight is not recommended.
+            - "GO IFR": Flight is recommended under Instrument Flight Rules.
+            - "GO VFR": Flight is suitable under Visual Flight Rules.
+    """
+
+    aircraft: AircraftModel
+    departure_airfield: AirfieldModel
+    arrival_airfield: AirfieldModel
+    recommendation: Literal["NO GO", "GO IFR", "GO VFR"]
+
+
 class InputData(BaseModel):
     """
     Represents input data required for flight planning.
@@ -189,12 +214,18 @@ def get_input() -> InputData:
     )
 
 
-def generate_briefing(data: AirfieldModel, output_path: str = "briefing.pdf") -> HTML:
+def generate_briefing(briefing: Briefing) -> HTML:
     template_dir = Path(__file__).parent
     environment = Environment(loader=FileSystemLoader(template_dir))
     template = environment.get_template("briefing.html")
 
-    html_output = template.render(data)
+    aircraft = briefing.aircraft
+    departure = briefing.departure_airfield.model_dump()
+    arrival = briefing.arrival_airfield.model_dump()
+    html_output = template.render(departure=departure, arrival=arrival, aircraft=aircraft)
+    output_path = (f"Flight_Briefing_{departure.get("icaoId")}_to_"
+                   f"{arrival.get("icaoId")}_{datetime.today().date()}.pdf")
+
     return HTML(string=html_output).write_pdf(output_path)
 
 
@@ -446,20 +477,27 @@ def main():
         weather_api=weather_api, params=arrival_params
     )
 
-    # Airfields data
-    departure_airfield_data = departure_airfield_model_builder.build()
-    arrival_airfield_data = arrival_airfield_model_builder.build()
+    # Data for output
+    aircraft = data_inputs.aircraft_data
+    departure = departure_airfield_model_builder.build()
+    arrival = arrival_airfield_model_builder.build()
+    briefing = Briefing(
+        aircraft=aircraft.model_dump(),
+        departure_airfield=departure,
+        arrival_airfield=arrival,
+        recommendation="NO GO",
+    )
 
     # Prints the output
     print(50 * "-")
-    print(f"Departure airfield data: {departure_airfield_data}.")
-    print(f"Arrival airfield data: {arrival_airfield_data}.")
-    print(f"Aircraft data: {data_inputs.aircraft_data.model_dump()}.")
+    print(f"Departure airfield data: {departure}.")
+    print(f"Arrival airfield data: {arrival}.")
+    print(f"Aircraft data: {aircraft.model_dump()}.")
     print(f"Aircraft data fetched from API: {aircraft_api.load_data(aircraft_params)}.")
     print(50 * "-")
 
     # Generate PDF briefing
-    generate_briefing(data=departure_airfield_data)
+    generate_briefing(briefing=briefing)
 
 
 if __name__ == "__main__":

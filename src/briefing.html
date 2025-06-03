@@ -1,71 +1,304 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>Airfield Briefing - {{ icaoId }}</title>
+  <meta charset="UTF-8" />
+  <title>Flight Readiness Briefing</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 30px; }
-    h1, h2 { text-align: center; }
-    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-    th, td { border: 1px solid #ccc; padding: 8px; }
-    .label { font-weight: bold; }
-    .metar-taf { margin-top: 10px; padding: 10px; background: #eee; }
+    @page {
+      size: A4 portrait;
+      margin: 20mm;
+    }
+
+    body {
+      font-family: Calibri, sans-serif;
+      font-size: 10px;
+      margin: 0;
+      padding: 0;
+      color: #000;
+      background-color: #fff;
+    }
+
+    h1 {
+      text-align: center;
+      margin: 0 0 20px;
+      font-size: 18px;
+    }
+
+    h2 {
+      margin: 0 0 10px;
+      font-size: 14px;
+      text-align: center;
+    }
+
+    .airfield-wrapper {
+      width: 90%;
+      margin: 0 auto 20px;
+      display: flex;
+      justify-content: space-between;
+      gap: 2%;
+    }
+
+    .airfield-cell {
+      width: 49%;
+      padding: 12px;
+      border: 0.25px solid #ccc; /* light grey */
+      border-radius: 6px;
+      box-sizing: border-box;
+    }
+
+    .section-title {
+      font-weight: bold;
+      font-size: 12px;
+      margin: 0 0 4px 0;
+      padding: 0;
+    }
+
+    .section-subtitle {
+      font-weight: bold;
+      font-size: 11px;
+      margin: 8px 0 4px;
+    }
+
+    .normal-data {
+      font-style: normal;
+      font-size: 10px;
+    }
+
+    .italic-small {
+      font-style: italic;
+      font-size: 9px;
+    }
+
+    .elevation {
+      text-align: center;
+      margin-bottom: 6px;
+    }
+
+    hr.section-divider {
+      border: none;
+      height: 0.375px;
+      background-color: #e0e9e0;
+      margin: 10px 0 14px;
+    }
+
+    table.detail-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 10px;
+      table-layout: fixed;
+      font-size: 9px;
+    }
+
+    .detail-table th,
+    .detail-table td {
+      padding: 4px 6px;
+      border: 0.25px solid #000;
+      text-align: center;
+      font-size: 9px;
+      box-sizing: border-box;
+    }
+
+    .detail-table th {
+      background-color: #d9ead3;
+      font-weight: bold;
+      line-height: 1.2;
+      color: #000000;
+    }
+
+    pre {
+      background-color: #ffffff;
+      border: 0.125px solid #000;  /* changed from 1px */
+      padding: 6px;
+      font-family: Consolas, monospace;
+      white-space: pre-wrap;
+      font-size: 9px;
+      margin: 0 0 8px 0;
+    }
+
+    .full-width-section {
+      width: 90%;
+      margin: 0 auto 20px;
+      padding: 12px;
+      border: 0.25px solid #ccc; /* light grey */
+      border-radius: 6px;
+      box-sizing: border-box;
+    }
+
+    /* Aircraft info table styles */
+    .aircraft-table {
+      width: 100%;
+      table-layout: fixed;
+      border-collapse: collapse;
+      margin-bottom: 10px;
+      font-size: 9px;
+    }
+
+    .aircraft-table th,
+    .aircraft-table td {
+      padding: 6px 6px;
+      border: 0.25px solid #000;
+      text-align: center;
+      box-sizing: border-box;
+      width: 16.6667%;
+    }
+
+    .aircraft-table th {
+      background-color: #d9ead3;
+      font-weight: bold;
+      line-height: 1.2;
+      color: #000000;
+      white-space: normal;
+    }
   </style>
 </head>
 <body>
 
-<h1>Airfield Briefing</h1>
+  <h1>Flight Readiness Briefing</h1>
 
-<p><span class="label">ICAO Code:</span> {{ icaoId }}</p>
-<p><span class="label">Elevation:</span> {{ elevation }} ft</p>
-<p><span class="label">Temperature:</span> {{ temperature }} °C</p>
-<p><span class="label">Wind:</span> {{ wind.direction }}° / {{ wind.speed }} kt</p>
+  <div class="airfield-wrapper">
+    <!-- Departure -->
+    <div class="airfield-cell">
+      <h2>Departure: <span class="section-title">{{ departure.icaoId }}</span></h2>
+      <p class="elevation"><strong>Elevation:</strong> <span class="normal-data">{{ departure.elevation }} ft</span></p>
 
-<h2>Runways</h2>
-<table>
-  <thead>
-    <tr>
-      <th>Direction</th>
-      <th>Length (ft)</th>
-      <th>Width (ft)</th>
-      <th>Surface</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for r in runway %}
-    <tr>
-      <td>{{ r.direction }}</td>
-      <td>{{ r.length }}</td>
-      <td>{{ r.width }}</td>
-      <td>{{ r.surface }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
+      <hr class="section-divider" />
 
-<h2>Frequencies</h2>
-<table>
-  <thead>
-    <tr>
-      <th>Service</th>
-      <th>Frequency (MHz)</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for key, value in frequency.items() %}
-    <tr>
-      <td>{{ key|upper }}</td>
-      <td>{{ value }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
+      <div>
+        <div class="section-title">Runways</div>
+        <table class="detail-table">
+          <tr><th>Direction</th><th>Length</th><th>Width</th><th>Surface</th></tr>
+          {% for rw in departure.runway %}
+          <tr>
+            <td class="italic-small">{{ rw.direction }}</td>
+            <td class="italic-small">{{ rw.length }}</td>
+            <td class="italic-small">{{ rw.width }}</td>
+            <td class="italic-small">{{ rw.surface }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
 
-<h2>Meteorological</h2>
-<p class="label">METAR:</p>
-<div class="metar-taf">{{ metar }}</div>
-<p class="label">TAF:</p>
-<div class="metar-taf">{{ taf }}</div>
+      <hr class="section-divider" />
+
+      <div>
+        <div class="section-title">Frequencies</div>
+        <table class="detail-table">
+          <tr><th>Service</th><th>Frequency</th></tr>
+          {% for key, value in departure.frequency.items() %}
+          <tr>
+            <td class="italic-small">{{ key|upper }}</td>
+            <td class="italic-small">{{ value }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+
+      <hr class="section-divider" />
+
+      <div>
+        <div class="section-title">Weather</div>
+        <table class="detail-table">
+          <tr><th>Wind</th><th>Temperature</th></tr>
+          <tr>
+            <td class="italic-small">{{ departure.wind.direction }}° / {{ departure.wind.speed }} kt</td>
+            <td class="italic-small">{{ departure.temperature }}°C</td>
+          </tr>
+        </table>
+        <div class="section-subtitle">METAR</div>
+        <pre>{{ departure.metar }}</pre>
+        <div class="section-subtitle">TAF</div>
+        <pre>{{ departure.taf }}</pre>
+      </div>
+    </div>
+
+    <!-- Arrival -->
+    <div class="airfield-cell">
+      <h2>Arrival: <span class="section-title">{{ arrival.icaoId }}</span></h2>
+      <p class="elevation"><strong>Elevation:</strong> <span class="normal-data">{{ arrival.elevation }} ft</span></p>
+
+      <hr class="section-divider" />
+
+      <div>
+        <div class="section-title">Runways</div>
+        <table class="detail-table">
+          <tr><th>Direction</th><th>Length</th><th>Width</th><th>Surface</th></tr>
+          {% for rw in arrival.runway %}
+          <tr>
+            <td class="italic-small">{{ rw.direction }}</td>
+            <td class="italic-small">{{ rw.length }}</td>
+            <td class="italic-small">{{ rw.width }}</td>
+            <td class="italic-small">{{ rw.surface }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+
+      <hr class="section-divider" />
+
+      <div>
+        <div class="section-title">Frequencies</div>
+        <table class="detail-table">
+          <tr><th>Service</th><th>Frequency</th></tr>
+          {% for key, value in arrival.frequency.items() %}
+          <tr>
+            <td class="italic-small">{{ key|upper }}</td>
+            <td class="italic-small">{{ value }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+
+      <hr class="section-divider" />
+
+      <div>
+        <div class="section-title">Weather</div>
+        <table class="detail-table">
+          <tr><th>Wind</th><th>Temperature</th></tr>
+          <tr>
+            <td class="italic-small">{{ arrival.wind.direction }}° / {{ arrival.wind.speed }} kt</td>
+            <td class="italic-small">{{ arrival.temperature }}°C</td>
+          </tr>
+        </table>
+        <div class="section-subtitle">METAR</div>
+        <pre>{{ arrival.metar }}</pre>
+        <div class="section-subtitle">TAF</div>
+        <pre>{{ arrival.taf }}</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Aircraft Info -->
+  <div class="full-width-section">
+    <div class="section-title">Aircraft Information</div>
+    <table class="aircraft-table">
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>MTOW (kg)</th>
+          <th>Takeoff Dist.<br />(Sea Level, m)</th>
+          <th>Landing Dist.<br />(Sea Level, m)</th>
+          <th>Stall Speed<br />(kt)</th>
+          <th>Max Crosswind<br />Component (kt)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="italic-small">{{ aircraft.type }}</td>
+          <td class="italic-small">{{ aircraft.mtow }}</td>
+          <td class="italic-small">{{ aircraft.takeoff_distance_at_sea_level }}</td>
+          <td class="italic-small">{{ aircraft.landing_distance_at_sea_level }}</td>
+          <td class="italic-small">{{ aircraft.stall_speed }}</td>
+          <td class="italic-small">{{ aircraft.xwind_max_speed }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Recommendation -->
+  <div class="full-width-section">
+    <div class="section-title">Recommendation</div>
+    <p><strong>Status:</strong> <span class="italic-small">{{ recommendation }}</span></p>
+  </div>
 
 </body>
 </html>
