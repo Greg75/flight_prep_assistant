@@ -229,17 +229,6 @@ def generate_briefing(briefing: Briefing) -> HTML:
     return HTML(string=html_output).write_pdf(output_path)
 
 
-class AirfieldModelFacade:
-    def __init__(self, airfield_api, weather_api) -> None:
-        self.airfield_api = airfield_api
-        self.weather_api = weather_api
-
-    def load_data(self) -> dict:
-        airfield_data = self.airfield_api.load_data()
-        weather_data = self.weather_api.load_data()
-        return {**airfield_data, **weather_data}
-
-
 # Base classes
 class ApiUrlKey(Enum):
     """
@@ -401,15 +390,18 @@ class AirfieldModelBuilder:
         Returns:
             list: A list of serialized RunwayModel data (as dicts).
         """
-        return [
-            RunwayModel(
-                direction=runway_from_api.get("id"),
-                length=runway_from_api.get("dimension").split("x")[0],
-                width=runway_from_api.get("dimension").split("x")[1],
-                surface=runway_from_api.get("surface"),
-            ).model_dump()
-            for runway_from_api in runways_input
-        ]
+        if runways_input:
+            return [
+                RunwayModel(
+                    direction=runway_from_api.get("id"),
+                    length=runway_from_api.get("dimension").split("x")[0],
+                    width=runway_from_api.get("dimension").split("x")[1],
+                    surface=runway_from_api.get("surface"),
+                ).model_dump()
+                for runway_from_api in runways_input
+            ]
+        else:
+            return []
 
     @staticmethod
     def _extract_frequencies(api_frequencies: str) -> FrequencyModel | dict:
