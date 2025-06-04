@@ -105,7 +105,7 @@ class AircraftModel(BaseModel):
     xwind_max_speed: float
 
 
-class Briefing(BaseModel):
+class BriefingModel(BaseModel):
     """
     Represents a comprehensive preflight briefing for a pilot.
 
@@ -212,57 +212,71 @@ def get_input() -> InputData:
     )
 
 
-def render_briefing_html(briefing: Briefing) -> HTML:
-    """
-    Renders HTML content for a flight briefing using the provided briefing data.
-
-    This function uses a Jinja2 template to generate HTML based on the aircraft,
-    departure airfield, and arrival airfield information from the briefing object.
-
-    Args:
-        briefing (Briefing): A Briefing object containing aircraft, departure, and arrival data.
-
-    Returns:
-        HTML: An HTML object containing the rendered briefing content, suitable for PDF generation.
-    """
-    template_dir = Path(__file__).parent
-    environment = Environment(loader=FileSystemLoader(template_dir))
-    template = environment.get_template("briefing.html")
-
-    aircraft = briefing.aircraft.model_dump()
-    departure = briefing.departure_airfield.model_dump()
-    arrival = briefing.arrival_airfield.model_dump()
-    html_output = template.render(
-        departure=departure, arrival=arrival, aircraft=aircraft
-    )
-
-    return HTML(string=html_output)
-
-
-def write_briefing_pdf(html: HTML, departure_icao: str, arrival_icao: str) -> Path:
-    """
-    Writes the provided HTML content to a PDF file and returns the output file path.
-
-    The filename is constructed using the departure and arrival ICAO codes,
-    along with the current date (e.g., Flight_Briefing_KJFK_to_EGLL_2025-06-04.pdf).
-
-    Args:
-        html (HTML): The rendered HTML content to convert to PDF.
-        departure_icao (str): ICAO code of the departure airport.
-        arrival_icao (str): ICAO code of the arrival airport.
-
-    Returns:
-        Path: The file path to the saved PDF.
-    """
-    output_filename = f"Flight_Briefing_{departure_icao}_to_{arrival_icao}_{datetime.today().date()}.pdf"
-    output_path = Path.cwd() / output_filename
-
-    html.write_pdf(str(output_path))
-
-    return output_path
-
-
 # Base classes
+class Briefing:
+    """
+    Handles the rendering and PDF generation of a flight briefing.
+
+    This class accepts a BriefingModel object, extracts key details, renders an HTML
+    representation of the briefing using a Jinja2 template, and generates a PDF file.
+    """
+
+    def __init__(self, briefing: BriefingModel) -> None:
+        """
+        Initialize the Briefing instance with a BriefingModel.
+
+        Args:
+            briefing (BriefingModel): An instance containing briefing data.
+        """
+        self.briefing = briefing
+        self.aircraft = briefing.aircraft.model_dump()
+        self.departure = briefing.departure_airfield.model_dump()
+        self.arrival = briefing.arrival_airfield.model_dump()
+        self.html: Optional[HTML] = None
+
+    def render_briefing_html(self) -> HTML:
+        """
+        Render the briefing data into HTML using a Jinja2 template.
+
+        Returns:
+            HTML: A WeasyPrint HTML object containing the rendered briefing.
+        """
+        template_dir = Path(__file__).parent
+        environment = Environment(loader=FileSystemLoader(template_dir))
+        template = environment.get_template("briefing.html")
+
+        html_output = template.render(
+            departure=self.departure,
+            arrival=self.arrival,
+            aircraft=self.aircraft,
+        )
+
+        self.html = HTML(string=html_output)
+        return self.html
+
+    def write_briefing_pdf(self) -> Path:
+        """
+        Write the rendered HTML briefing to a PDF file.
+
+        The filename is constructed using the departure and arrival ICAO codes
+        and the current date (e.g., Flight_Briefing_KJFK_to_EGLL_2025-06-04.pdf).
+
+        Returns:
+            Path: The file path of the generated PDF.
+        """
+        if self.html is None:
+            raise ValueError("HTML content is not rendered. Call render_briefing_html() first.")
+
+        dep_icao = self.departure.get("icaoId", None)
+        arr_icao = self.arrival.get("icaoId", None)
+        date_str = datetime.today().date().isoformat()
+        output_filename = f"Flight_Briefing_{dep_icao}_to_{arr_icao}_{date_str}.pdf"
+        output_path = Path.cwd() / output_filename
+
+        self.html.write_pdf(str(output_path))
+        return output_path
+
+
 class ApiUrlKey(Enum):
     """
     Enumeration of environment variable keys that store base URLs for different external APIs.
@@ -410,7 +424,7 @@ class AirfieldModelBuilder:
                 frequency=parsed_frequencies,
                 metar=self.airfield_records.get("rawOb", None),
                 taf=self.airfield_records.get("rawTaf", None),
-            ).model_dump()
+            )
 
     @staticmethod
     def _extract_runways(runways_input: list) -> list[RunwayModel]:
@@ -506,7 +520,7 @@ def main():
     aircraft = data_inputs.aircraft_data
     departure = departure_airfield_model_builder.build()
     arrival = arrival_airfield_model_builder.build()
-    briefing = Briefing(
+    briefing = BriefingModel(
         aircraft=aircraft,
         departure_airfield=departure,
         arrival_airfield=arrival,
@@ -515,21 +529,19 @@ def main():
 
     # Prints the output
     print(50 * "-")
-    print(f"Departure airfield data: {departure}.")
-    print(f"Arrival airfield data: {arrival}.")
+    print(f"Departure airfield data: {departure.model_dump()}.")
+    print(f"Arrival airfield data: {arrival.model_dump()}.")
     print(f"Aircraft data: {aircraft.model_dump()}.")
-    print(f"Aircraft data fetched from API: {aircraft_api.load_data(aircraft_params)}.")
     print(50 * "-")
 
+    # Create HTML briefing object
+    html = Briefing(briefing=briefing)
+
     # Render HTML briefing
-    html = render_briefing_html(briefing=briefing)
+    html.render_briefing_html()
 
     # Write HTML briefing to PDF
-    write_briefing_pdf(
-        html=html,
-        departure_icao=briefing.departure_airfield.icaoId,
-        arrival_icao=briefing.arrival_airfield.icaoId,
-    )
+    html.write_briefing_pdf()
 
 
 if __name__ == "__main__":
