@@ -227,7 +227,7 @@ def generate_briefing(briefing: Briefing) -> HTML:
     environment = Environment(loader=FileSystemLoader(template_dir))
     template = environment.get_template("briefing.html")
 
-    aircraft = briefing.aircraft
+    aircraft = briefing.aircraft.model_dump()
     departure = briefing.departure_airfield.model_dump()
     arrival = briefing.arrival_airfield.model_dump()
     html_output = template.render(
@@ -486,7 +486,7 @@ def main():
     departure = departure_airfield_model_builder.build()
     arrival = arrival_airfield_model_builder.build()
     briefing = Briefing(
-        aircraft=aircraft.model_dump(),
+        aircraft=aircraft,
         departure_airfield=departure,
         arrival_airfield=arrival,
         recommendation="NO GO",
