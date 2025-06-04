@@ -212,16 +212,18 @@ def get_input() -> InputData:
     )
 
 
-def generate_briefing(briefing: Briefing) -> HTML:
+def render_briefing_html(briefing: Briefing) -> HTML:
     """
-    Generates a flight briefing PDF from the given briefing data using an HTML template.
+    Renders HTML content for a flight briefing using the provided briefing data.
+
+    This function uses a Jinja2 template to generate HTML based on the aircraft,
+    departure airfield, and arrival airfield information from the briefing object.
 
     Args:
-        briefing (Briefing): A Briefing object containing details about the aircraft,
-                             departure airfield, and arrival airfield.
+        briefing (Briefing): A Briefing object containing aircraft, departure, and arrival data.
 
     Returns:
-        HTML: An HTML object representing the rendered briefing, with the PDF saved to disk.
+        HTML: An HTML object containing the rendered briefing content, suitable for PDF generation.
     """
     template_dir = Path(__file__).parent
     environment = Environment(loader=FileSystemLoader(template_dir))
@@ -233,12 +235,31 @@ def generate_briefing(briefing: Briefing) -> HTML:
     html_output = template.render(
         departure=departure, arrival=arrival, aircraft=aircraft
     )
-    output_path = (
-        f"Flight_Briefing_{departure.get('icaoId')}_to_"
-        f"{arrival.get('icaoId')}_{datetime.today().date()}.pdf"
-    )
 
-    return HTML(string=html_output).write_pdf(output_path)
+    return HTML(string=html_output)
+
+
+def write_briefing_pdf(html: HTML, departure_icao: str, arrival_icao: str) -> Path:
+    """
+    Writes the provided HTML content to a PDF file and returns the output file path.
+
+    The filename is constructed using the departure and arrival ICAO codes,
+    along with the current date (e.g., Flight_Briefing_KJFK_to_EGLL_2025-06-04.pdf).
+
+    Args:
+        html (HTML): The rendered HTML content to convert to PDF.
+        departure_icao (str): ICAO code of the departure airport.
+        arrival_icao (str): ICAO code of the arrival airport.
+
+    Returns:
+        Path: The file path to the saved PDF.
+    """
+    output_filename = f"Flight_Briefing_{departure_icao}_to_{arrival_icao}_{datetime.today().date()}.pdf"
+    output_path = Path.cwd() / output_filename
+
+    html.write_pdf(str(output_path))
+
+    return output_path
 
 
 # Base classes
@@ -500,8 +521,15 @@ def main():
     print(f"Aircraft data fetched from API: {aircraft_api.load_data(aircraft_params)}.")
     print(50 * "-")
 
-    # Generate PDF briefing
-    generate_briefing(briefing=briefing)
+    # Render HTML briefing
+    html = render_briefing_html(briefing=briefing)
+
+    # Write HTML briefing to PDF
+    write_briefing_pdf(
+        html=html,
+        departure_icao=briefing.departure_airfield.icaoId,
+        arrival_icao=briefing.arrival_airfield.icaoId,
+    )
 
 
 if __name__ == "__main__":
