@@ -141,9 +141,7 @@ class InputData(BaseModel):
     departure_airfield: str = Field(
         min_length=4, max_length=4, pattern=r"^[A-Za-z]{4}$"
     )
-    arrival_airfield: str = Field(
-        min_length=4, max_length=4, pattern=r"^[A-Za-z]{4}$"
-    )
+    arrival_airfield: str = Field(min_length=4, max_length=4, pattern=r"^[A-Za-z]{4}$")
     aircraft_data: AircraftModel
 
 
@@ -215,6 +213,16 @@ def get_input() -> InputData:
 
 
 def generate_briefing(briefing: Briefing) -> HTML:
+    """
+    Generates a flight briefing PDF from the given briefing data using an HTML template.
+
+    Args:
+        briefing (Briefing): A Briefing object containing details about the aircraft,
+                             departure airfield, and arrival airfield.
+
+    Returns:
+        HTML: An HTML object representing the rendered briefing, with the PDF saved to disk.
+    """
     template_dir = Path(__file__).parent
     environment = Environment(loader=FileSystemLoader(template_dir))
     template = environment.get_template("briefing.html")
@@ -222,9 +230,13 @@ def generate_briefing(briefing: Briefing) -> HTML:
     aircraft = briefing.aircraft
     departure = briefing.departure_airfield.model_dump()
     arrival = briefing.arrival_airfield.model_dump()
-    html_output = template.render(departure=departure, arrival=arrival, aircraft=aircraft)
-    output_path = (f"Flight_Briefing_{departure.get("icaoId")}_to_"
-                   f"{arrival.get("icaoId")}_{datetime.today().date()}.pdf")
+    html_output = template.render(
+        departure=departure, arrival=arrival, aircraft=aircraft
+    )
+    output_path = (
+        f"Flight_Briefing_{departure.get('icaoId')}_to_"
+        f"{arrival.get('icaoId')}_{datetime.today().date()}.pdf"
+    )
 
     return HTML(string=html_output).write_pdf(output_path)
 
