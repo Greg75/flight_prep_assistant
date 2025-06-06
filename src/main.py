@@ -4,6 +4,11 @@ from enum import Enum
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from typing import List, Self, Optional
+from weasyprint import HTML
+from jinja2 import Environment, FileSystemLoader
+from pathlib import Path
+from datetime import datetime
+from typing import Literal
 
 load_dotenv()
 
@@ -100,6 +105,29 @@ class AircraftModel(BaseModel):
     xwind_max_speed: float
 
 
+class BriefingModel(BaseModel):
+    """
+    Represents a comprehensive preflight briefing for a pilot.
+
+    This model includes key data about the aircraft, departure and arrival airfields,
+    and a recommendation based on current flight conditions (e.g., weather, suitability).
+
+    Attributes:
+        aircraft (AircraftModel): Information about the aircraft used for the flight.
+        departure_airfield (AirfieldModel): Data about the departure airfield, including weather.
+        arrival_airfield (AirfieldModel): Data about the arrival airfield, including weather.
+        recommendation (Literal["NO GO", "GO IFR", "GO VFR"]): Flight recommendation based on the briefing.
+            - "NO GO": Flight is not recommended.
+            - "GO IFR": Flight is recommended under Instrument Flight Rules.
+            - "GO VFR": Flight is suitable under Visual Flight Rules.
+    """
+
+    aircraft: AircraftModel
+    departure_airfield: AirfieldModel
+    arrival_airfield: AirfieldModel
+    recommendation: Literal["NO GO", "GO IFR", "GO VFR"]
+
+
 class InputData(BaseModel):
     """
     Represents input data required for flight planning.
@@ -113,9 +141,7 @@ class InputData(BaseModel):
     departure_airfield: str = Field(
         min_length=4, max_length=4, pattern=r"^[A-Za-z]{4}$"
     )
-    arrival_airfield: str = Field(
-        min_length=4, max_length=4, pattern=r"^[A-Za-z]{4}$"
-    )
+    arrival_airfield: str = Field(min_length=4, max_length=4, pattern=r"^[A-Za-z]{4}$")
     aircraft_data: AircraftModel
 
 
@@ -186,18 +212,71 @@ def get_input() -> InputData:
     )
 
 
-class AirfieldModelFacade:
-    def __init__(self, airfield_api, weather_api) -> None:
-        self.airfield_api = airfield_api
-        self.weather_api = weather_api
-
-    def load_data(self) -> dict:
-        airfield_data = self.airfield_api.load_data()
-        weather_data = self.weather_api.load_data()
-        return {**airfield_data, **weather_data}
-
-
 # Base classes
+class Briefing:
+    """
+    Handles the rendering and PDF generation of a flight briefing.
+
+    This class accepts a BriefingModel object, extracts key details, renders an HTML
+    representation of the briefing using a Jinja2 template, and generates a PDF file.
+    """
+
+    def __init__(self, briefing: BriefingModel) -> None:
+        """
+        Initialize the Briefing instance with a BriefingModel.
+
+        Args:
+            briefing (BriefingModel): An instance containing briefing data.
+        """
+        self.briefing = briefing
+        self.aircraft = briefing.aircraft.model_dump()
+        self.departure = briefing.departure_airfield.model_dump()
+        self.arrival = briefing.arrival_airfield.model_dump()
+        self.html: Optional[HTML] = None
+
+    def render_briefing_html(self) -> HTML:
+        """
+        Render the briefing data into HTML using a Jinja2 template.
+
+        Returns:
+            HTML: A WeasyPrint HTML object containing the rendered briefing.
+        """
+        template_dir = Path(__file__).parent
+        environment = Environment(loader=FileSystemLoader(template_dir))
+        template = environment.get_template("briefing.html")
+
+        html_output = template.render(
+            departure=self.departure,
+            arrival=self.arrival,
+            aircraft=self.aircraft,
+        )
+
+        self.html = HTML(string=html_output)
+        return self.html
+
+    def write_briefing_pdf(self) -> Path:
+        """
+        Write the rendered HTML briefing to a PDF file.
+
+        The filename is constructed using the departure and arrival ICAO codes
+        and the current date (e.g., Flight_Briefing_KJFK_to_EGLL_2025-06-04.pdf).
+
+        Returns:
+            Path: The file path of the generated PDF.
+        """
+        if self.html is None:
+            raise ValueError("HTML content is not rendered. Call render_briefing_html() first.")
+
+        dep_icao = self.departure.get("icaoId", None)
+        arr_icao = self.arrival.get("icaoId", None)
+        date_str = datetime.today().date().isoformat()
+        output_filename = f"Flight_Briefing_{dep_icao}_to_{arr_icao}_{date_str}.pdf"
+        output_path = Path.cwd() / output_filename
+
+        self.html.write_pdf(str(output_path))
+        return output_path
+
+
 class ApiUrlKey(Enum):
     """
     Enumeration of environment variable keys that store base URLs for different external APIs.
@@ -345,7 +424,7 @@ class AirfieldModelBuilder:
                 frequency=parsed_frequencies,
                 metar=self.airfield_records.get("rawOb", None),
                 taf=self.airfield_records.get("rawTaf", None),
-            ).model_dump()
+            )
 
     @staticmethod
     def _extract_runways(runways_input: list) -> list[RunwayModel]:
@@ -358,15 +437,18 @@ class AirfieldModelBuilder:
         Returns:
             list: A list of serialized RunwayModel data (as dicts).
         """
-        return [
-            RunwayModel(
-                direction=runway_from_api.get("id"),
-                length=runway_from_api.get("dimension").split("x")[0],
-                width=runway_from_api.get("dimension").split("x")[1],
-                surface=runway_from_api.get("surface"),
-            ).model_dump()
-            for runway_from_api in runways_input
-        ]
+        if runways_input:
+            return [
+                RunwayModel(
+                    direction=runway_from_api.get("id"),
+                    length=runway_from_api.get("dimension").split("x")[0],
+                    width=runway_from_api.get("dimension").split("x")[1],
+                    surface=runway_from_api.get("surface"),
+                ).model_dump()
+                for runway_from_api in runways_input
+            ]
+        else:
+            return []
 
     @staticmethod
     def _extract_frequencies(api_frequencies: str) -> FrequencyModel | dict:
@@ -434,13 +516,32 @@ def main():
         weather_api=weather_api, params=arrival_params
     )
 
+    # Data for output
+    aircraft = data_inputs.aircraft_data
+    departure = departure_airfield_model_builder.build()
+    arrival = arrival_airfield_model_builder.build()
+    briefing = BriefingModel(
+        aircraft=aircraft,
+        departure_airfield=departure,
+        arrival_airfield=arrival,
+        recommendation="NO GO",
+    )
+
     # Prints the output
     print(50 * "-")
-    print(f"Departure airfield data: {departure_airfield_model_builder.build()}.")
-    print(f"Arrival airfield data: {arrival_airfield_model_builder.build()}.")
-    print(f"Aircraft data: {data_inputs.aircraft_data.model_dump()}.")
-    print(f"Aircraft data fetched from API: {aircraft_api.load_data(aircraft_params)}.")
+    print(f"Departure airfield data: {departure.model_dump()}.")
+    print(f"Arrival airfield data: {arrival.model_dump()}.")
+    print(f"Aircraft data: {aircraft.model_dump()}.")
     print(50 * "-")
+
+    # Create HTML briefing object
+    html = Briefing(briefing=briefing)
+
+    # Render HTML briefing
+    html.render_briefing_html()
+
+    # Write HTML briefing to PDF
+    html.write_briefing_pdf()
 
 
 if __name__ == "__main__":

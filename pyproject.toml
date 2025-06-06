@@ -10,7 +10,10 @@ requires-python = ">=3.12"
 dependencies = [
     "requests (>=2.32.3,<3.0.0)",
     "python-dotenv (>=1.1.0,<2.0.0)",
-    "pydantic (>=2.11.4,<3.0.0)"
+    "pydantic (>=2.11.4,<3.0.0)",
+    "fpdf2 (>=2.8.3,<3.0.0)",
+    "json2pdf (>=0.2,<0.3)",
+    "weasyprint (>=65.1,<66.0)"
 ]
 
 
