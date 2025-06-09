@@ -1,9 +1,12 @@
 import os
 import requests
+import time
 from enum import Enum
 from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from typing import List, Self, Optional
+from typing import List, Dict, Self, Optional
 from weasyprint import HTML
 from jinja2 import Environment, FileSystemLoader
 from pathlib import Path
@@ -129,6 +132,13 @@ class BriefingModel(BaseModel):
     departure_airfield: AirfieldModel
     arrival_airfield: AirfieldModel
     recommendation: Literal["NO GO", "GO IFR", "GO VFR"]
+
+
+class BriefingStatus(Enum):
+    PENDING = "pending"
+    IN_PROGRESS = "in progress"
+    COMPLETE = "complete"
+    ERROR = "error"
 
 
 class InputData(BaseModel):
@@ -549,7 +559,7 @@ def create_briefing_model(data: InputData, departure_airfield: AirfieldModel, ar
     )
 
 
-def create_briefing_html(briefing_model: BriefingModel) -> Briefing:
+def create_briefing(briefing_model: BriefingModel) -> Briefing:
     """
     Generate an HTML representation of the flight briefing from the briefing model.
 
@@ -562,34 +572,135 @@ def create_briefing_html(briefing_model: BriefingModel) -> Briefing:
     return Briefing(briefing_model=briefing_model)
 
 
-def render_briefing_html(briefing: Briefing) -> HTML:
-    """
-    Render the HTML output from a briefing object.
+app = FastAPI(debug=True)
 
-    Args:
-        briefing (Briefing): The briefing object containing all necessary content.
+briefing_store: Dict[str, BriefingModel] = {}
+briefing_status: Dict[str, BriefingStatus] = {}
+
+
+@app.get(path="/",
+         summary="Root endpoint for Briefing API",
+         description="This is the root endpoint of the Briefing API. It simply returns a message indicating "
+                     "that the API is running and operational.")
+def root() -> dict:
+    """
+    Root endpoint for the Briefing API.
 
     Returns:
-        HTML: A rendered HTML object representing the flight briefing.
+        dict: A simple message indicating that the API is running.
     """
-    return briefing.render_briefing_html()
+    return {"message": "Briefing API is running."}
 
 
-def write_briefing_pdf(html: HTML) -> Path:
+@app.get(path="/ping",
+         summary="Ping the API to check its health",
+         description="This endpoint returns a status message indicating that the API is healthy and responsive. "
+                     "It's often used to check if the API is up and running.")
+def ping_api() -> dict:
     """
-    Generate a PDF file from the rendered HTML briefing.
-
-    Args:
-        html (HTML): The rendered HTML content of the flight briefing.
+    Health check endpoint to verify the API is responsive.
 
     Returns:
-        Path: The file path to the generated PDF document.
+        dict: A status message indicating the API is healthy.
     """
-    return html.write_pdf()
+    return {"status": "healthy"}
 
 
-def build_briefing():
-    pass
+@app.post(path="/generate",
+          response_model=BriefingModel,
+          summary="Generate a flight briefing based on input data",
+          description="This endpoint generates a flight briefing based on the provided input data, "
+                      "including details like departure and arrival airfields. It returns a structured "
+                      "BriefingModel containing all briefing information for the flight.")
+def generate_briefing(data: InputData) -> BriefingModel:
+    """
+    Generates a flight briefing based on input data.
+
+    Args:
+        data (InputData): The input parameters including departure and arrival details.
+
+    Returns:
+        BriefingModel: A structured model containing briefing information.
+    """
+    airfield_api, weather_api = create_api_client()
+    departure_params, arrival_params = create_api_params(data=data)
+
+    departure_airfield = create_airfield_model(
+        airfield_api=airfield_api,
+        weather_api=weather_api,
+        airfield_api_params=departure_params
+    )
+
+    arrival_airfield = create_airfield_model(
+        airfield_api=airfield_api,
+        weather_api=weather_api,
+        airfield_api_params=arrival_params
+    )
+
+    briefing_model = create_briefing_model(
+        data=data,
+        departure_airfield=departure_airfield,
+        arrival_airfield=arrival_airfield
+    )
+
+    briefing_store.update(
+        {
+            str(briefing_model.briefing_id): briefing_model
+        }
+    )
+
+    return briefing_model
+
+
+@app.get(path="/briefing/{briefing_id}/download",
+         response_model=Path,
+         summary="Download a briefing as a PDF",
+         description="This endpoint allows you to download a generated flight briefing as a PDF "
+                     "using the provided briefing ID. If the briefing ID is invalid, a 404 error will be returned. "
+                     "If there are issues during PDF generation, a 500 error will be raised.")
+def download_briefing(briefing_id: str) -> Path:
+    """
+    Downloads the PDF version of a generated flight briefing.
+
+    Args:
+        briefing_id (str): The ID of the briefing to download.
+
+    Returns:
+        Path: The file path to the generated PDF.
+
+    Raises:
+        HTTPException: If the briefing ID is not found or PDF generation fails.
+    """
+    briefing_status.update({briefing_id: BriefingStatus.PENDING})
+    briefing_model = briefing_store.get(briefing_id)
+
+    time.sleep(15)
+    briefing_status.update({briefing_id: BriefingStatus.IN_PROGRESS})
+    briefing = Briefing(briefing_model)
+    briefing.render_briefing_html()
+
+    time.sleep(5)
+    briefing_status.update({briefing_id: BriefingStatus.COMPLETE})
+
+    return briefing.write_briefing_pdf()
+
+
+@app.get(path="/briefing/{briefing_id}/status",
+         summary="Check the status of a briefing",
+         description="This endpoint allows you to retrieve the current status of a briefing by providing "
+                     "the briefing ID. If the briefing ID exists, it returns the corresponding status. "
+                     "If the briefing ID is invalid, the status will be `None` or an error.")
+def check_status(briefing_id: str) -> dict:
+    """
+    Check the current status of a briefing.
+
+    Args:
+        briefing_id (str): The unique identifier of the briefing.
+
+    Returns:
+        dict: A dictionary containing the briefing ID and its current status.
+    """
+    return {briefing_id: briefing_status.get(briefing_id)}
 
 
 if __name__ == "__main__":
