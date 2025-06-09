@@ -9,6 +9,7 @@ from jinja2 import Environment, FileSystemLoader
 from pathlib import Path
 from datetime import datetime
 from typing import Literal
+from uuid import UUID, uuid4
 
 load_dotenv()
 
@@ -113,6 +114,7 @@ class BriefingModel(BaseModel):
     and a recommendation based on current flight conditions (e.g., weather, suitability).
 
     Attributes:
+        briefing_id (UUID): Unique briefing id.
         aircraft (AircraftModel): Information about the aircraft used for the flight.
         departure_airfield (AirfieldModel): Data about the departure airfield, including weather.
         arrival_airfield (AirfieldModel): Data about the arrival airfield, including weather.
@@ -122,6 +124,7 @@ class BriefingModel(BaseModel):
             - "GO VFR": Flight is suitable under Visual Flight Rules.
     """
 
+    briefing_id: UUID
     aircraft: AircraftModel
     departure_airfield: AirfieldModel
     arrival_airfield: AirfieldModel
@@ -221,17 +224,17 @@ class Briefing:
     representation of the briefing using a Jinja2 template, and generates a PDF file.
     """
 
-    def __init__(self, briefing: BriefingModel) -> None:
+    def __init__(self, briefing_model: BriefingModel) -> None:
         """
         Initialize the Briefing instance with a BriefingModel.
 
         Args:
-            briefing (BriefingModel): An instance containing briefing data.
+            briefing_model (BriefingModel): An instance containing briefing data.
         """
-        self.briefing = briefing
-        self.aircraft = briefing.aircraft.model_dump()
-        self.departure = briefing.departure_airfield.model_dump()
-        self.arrival = briefing.arrival_airfield.model_dump()
+        self.briefing = briefing_model
+        self.aircraft = briefing_model.aircraft.model_dump()
+        self.departure = briefing_model.departure_airfield.model_dump()
+        self.arrival = briefing_model.arrival_airfield.model_dump()
         self.html: Optional[HTML] = None
 
     def render_briefing_html(self) -> HTML:
@@ -473,76 +476,121 @@ class AirfieldModelBuilder:
             return {}
 
 
-def main():
-    # Creates instances of API
+def create_api_client() -> tuple[ApiClient, ApiClient]:
+    """
+    Create and return API clients for airfield and weather services.
+
+    Returns:
+        tuple[ApiClient, ApiClient]: A tuple containing the API clients for airfield and weather data respectively.
+    """
     airfield_api = ApiClient(api_url_key=ApiUrlKey.AIRFIELD)
     weather_api = ApiClient(api_url_key=ApiUrlKey.WEATHER)
-    aircraft_api = ApiClient(api_url_key=ApiUrlKey.AIRCRAFT)
 
-    # Gathers data from the user
-    data_inputs = get_input()
+    return airfield_api, weather_api
 
-    # Parameters to fetch data from the APIs
-    departure_params = AirfieldParams(
-        ids=data_inputs.departure_airfield,
+
+def create_api_params(data: InputData) -> tuple[AirfieldParams, AirfieldParams]:
+    """
+    Generate API parameters for retrieving airfield data based on the input flight data.
+
+    Args:
+        data (InputData): The input data containing identifiers for departure and arrival airfields.
+
+    Returns:
+        tuple[AirfieldParams, AirfieldParams]: A tuple containing the parameters for the departure and arrival airfields.
+    """
+    departure_params = AirfieldParams(ids=data.departure_airfield)
+    arrival_params = AirfieldParams(ids=data.arrival_airfield)
+
+    return departure_params, arrival_params
+
+
+def create_airfield_model(airfield_api: ApiClient, weather_api: ApiClient, airfield_api_params: AirfieldParams
+                          ) -> AirfieldModel:
+    """
+    Build an AirfieldModel using the given API clients and parameters.
+
+    Args:
+        airfield_api (ApiClient): API client for accessing airfield data.
+        weather_api (ApiClient): API client for accessing weather data.
+        airfield_api_params (AirfieldParams): Parameters specifying the airfield data to retrieve.
+
+    Returns:
+        AirfieldModel: A model combining both airfield and weather data for the specified location.
+    """
+    airfield_model_builder = AirfieldModelBuilder()
+    airfield_model_builder.add_airfield_data(airfield_api=airfield_api, params=airfield_api_params)
+    airfield_model_builder.add_weather_data(weather_api=weather_api, params=airfield_api_params)
+
+    airfield_model = airfield_model_builder.build()
+
+    return airfield_model
+
+
+def create_briefing_model(data: InputData, departure_airfield: AirfieldModel, arrival_airfield: AirfieldModel
+                          ) -> BriefingModel:
+    """
+    Create a briefing model that consolidates all necessary flight information.
+
+    Args:
+        data (InputData): The input flight data including aircraft information.
+        departure_airfield (AirfieldModel): The model for the departure airfield.
+        arrival_airfield (AirfieldModel): The model for the arrival airfield.
+
+    Returns:
+        BriefingModel: A fully populated briefing model with metadata and recommendations.
+    """
+    return BriefingModel(
+        briefing_id=uuid4(),
+        aircraft=data.aircraft_data,
+        departure_airfield=departure_airfield,
+        arrival_airfield=arrival_airfield,
+        recommendation="NO GO"
     )
 
-    arrival_params = AirfieldParams(
-        ids=data_inputs.arrival_airfield,
-    )
 
-    aircraft_params = AircraftParams(
-        api_key=os.getenv("AIRCRAFT_API_KEY"),
-        manufacturer=data_inputs.aircraft_data.type,
-    )
+def create_briefing_html(briefing_model: BriefingModel) -> Briefing:
+    """
+    Generate an HTML representation of the flight briefing from the briefing model.
 
-    # Creates builder class instances of departure and arrival airfield
-    departure_airfield_model_builder = AirfieldModelBuilder()
-    arrival_airfield_model_builder = AirfieldModelBuilder()
+    Args:
+        briefing_model (BriefingModel): The model containing the full flight briefing information.
 
-    # Adds airfield and weather data to the instance of departure_airfield_model_builder
-    departure_airfield_model_builder.add_airfield_data(
-        airfield_api=airfield_api, params=departure_params
-    )
-    departure_airfield_model_builder.add_weather_data(
-        weather_api=weather_api, params=departure_params
-    )
+    Returns:
+        Briefing: An object capable of rendering the briefing as HTML.
+    """
+    return Briefing(briefing_model=briefing_model)
 
-    # Adds airfield and weather data to the instance of arrival_airfield_model_builder
-    arrival_airfield_model_builder.add_airfield_data(
-        airfield_api=airfield_api, params=arrival_params
-    )
-    arrival_airfield_model_builder.add_weather_data(
-        weather_api=weather_api, params=arrival_params
-    )
 
-    # Data for output
-    aircraft = data_inputs.aircraft_data
-    departure = departure_airfield_model_builder.build()
-    arrival = arrival_airfield_model_builder.build()
-    briefing = BriefingModel(
-        aircraft=aircraft,
-        departure_airfield=departure,
-        arrival_airfield=arrival,
-        recommendation="NO GO",
-    )
+def render_briefing_html(briefing: Briefing) -> HTML:
+    """
+    Render the HTML output from a briefing object.
 
-    # Prints the output
-    print(50 * "-")
-    print(f"Departure airfield data: {departure.model_dump()}.")
-    print(f"Arrival airfield data: {arrival.model_dump()}.")
-    print(f"Aircraft data: {aircraft.model_dump()}.")
-    print(50 * "-")
+    Args:
+        briefing (Briefing): The briefing object containing all necessary content.
 
-    # Create HTML briefing object
-    html = Briefing(briefing=briefing)
+    Returns:
+        HTML: A rendered HTML object representing the flight briefing.
+    """
+    return briefing.render_briefing_html()
 
-    # Render HTML briefing
-    html.render_briefing_html()
 
-    # Write HTML briefing to PDF
-    html.write_briefing_pdf()
+def write_briefing_pdf(html: HTML) -> Path:
+    """
+    Generate a PDF file from the rendered HTML briefing.
+
+    Args:
+        html (HTML): The rendered HTML content of the flight briefing.
+
+    Returns:
+        Path: The file path to the generated PDF document.
+    """
+    return html.write_pdf()
+
+
+def build_briefing():
+    pass
 
 
 if __name__ == "__main__":
-    main()
+    pass
