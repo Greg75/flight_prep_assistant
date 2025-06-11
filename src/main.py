@@ -24,17 +24,31 @@ class RunwayModel(BaseModel):
 
     Attributes:
         direction (str | None): The runway's direction identifier (e.g., "09/27").
-        length (str | None): The total length of the runway, typically in meters or feet.
-        width (str): The width of the runway, typically in meters or feet.
+        length (str | None): The total length of the runway, in feet.
+        width (str): The width of the runway, in feet.
         surface (str): The surface type of the runway (e.g., asphalt, grass).
     """
 
     direction: Optional[str] = Field(
-        default=None, pattern=r"^\d{2,3}|\d{2}[L|R]/\d{2,3}|\d{2}[L|R]$"
+        default=None,
+        pattern=r"^\d{2,3}|\d{2}[L|R]/\d{2,3}|\d{2}[L|R]$",
+        description="The runway's direction identifier."
     )
-    length: Optional[str] = Field(default=None, pattern=r"^\d{3,5}$")
-    width: Optional[str] = Field(default=None, pattern=r"^\d{2,3}$")
-    surface: Optional[str] = Field(default=None, pattern=r"^[a-zA-Z]{1,99}$")
+    length: Optional[str] = Field(
+        default=None,
+        pattern=r"^\d{3,5}$",
+        description="The total length of the runway in feet."
+    )
+    width: Optional[str] = Field(
+        default=None,
+        pattern=r"^\d{2,3}$",
+        description="The width of the runway."
+    )
+    surface: Optional[str] = Field(
+        default=None,
+        pattern=r"^[a-zA-Z]{1,99}$",
+        description="The surface type of the runway."
+    )
 
 
 class WindModel(BaseModel):
@@ -46,8 +60,14 @@ class WindModel(BaseModel):
         speed (float | None): The wind speed in knots or meters per second.
     """
 
-    direction: Optional[int | str] = None
-    speed: Optional[float] = None
+    direction: Optional[int | str] = Field(
+        default=None,
+        description="Direction from which wind is blowing or descriptive text."
+    )
+    speed: Optional[float] = Field(
+        default=None,
+        description="Wind speed in knots."
+    )
 
 
 class FrequencyModel(BaseModel):
@@ -58,7 +78,10 @@ class FrequencyModel(BaseModel):
         twr (str): Tower frequency.
     """
 
-    twr: Optional[str] = None
+    twr: Optional[str] = Field(
+        default=None,
+        description="Tower frequency."
+    )
 
     model_config = {"extra": "allow"}
 
@@ -78,14 +101,35 @@ class AirfieldModel(BaseModel):
         taf (str | None): The latest TAF weather report for the airfield.
     """
 
-    icaoId: Optional[str] = None
-    runway: List[RunwayModel]
-    elevation: Optional[int] = None
-    wind: WindModel
-    temperature: Optional[float] = None
-    frequency: FrequencyModel
-    metar: Optional[str] = None
-    taf: Optional[str] = None
+    icaoId: Optional[str] = Field(
+        default=None,
+        description="The ICAO identifier of the airfield."
+    )
+    runway: List[RunwayModel] = Field(
+        description="A list of runways at the airfield."
+    )
+    elevation: Optional[int] = Field(
+        default=None,
+        description="Elevation of the airfield above the sea level."
+    )
+    wind: WindModel = Field(
+        description="Current wind conditions, direction and speed."
+    )
+    temperature: Optional[float] = Field(
+        default=None,
+        description="Current temperature at the airfield in degrees Celsius."
+    )
+    frequency: FrequencyModel = Field(
+        description="Communication frequencies for the airfield."
+    )
+    metar: Optional[str] = Field(
+        default=None,
+        description="The latest METAR weather report for the airfield."
+    )
+    taf: Optional[str] = Field(
+        default=None,
+        description="The latest TAF report for the airfield."
+    )
 
 
 class AircraftModel(BaseModel):
@@ -101,12 +145,25 @@ class AircraftModel(BaseModel):
         xwind_max_speed (float): Maximum crosswind speed the aircraft can handle, in knots.
     """
 
-    type: str = Field(min_length=3)
-    mtow: int
-    takeoff_distance_at_sea_level: int
-    landing_distance_at_sea_level: int
-    stall_speed: int
-    xwind_max_speed: float
+    type: str = Field(
+        min_length=3,
+        description="Aircraft type or model name."
+    )
+    mtow: int = Field(
+        description="Maximum takeoff weight in kilograms or pounds."
+    )
+    takeoff_distance_at_sea_level: int = Field(
+        description="Required takeoff distance at sea level under standard conditions."
+    )
+    landing_distance_at_sea_level: int = Field(
+        description="Required landing distance at sea level under standard conditions."
+    )
+    stall_speed: int = Field(
+        description="Stall speed of the aircraft in knots."
+    )
+    xwind_max_speed: float = Field(
+        description="Maximum crosswinds speed the aircraft can handle, in knots."
+    )
 
 
 class BriefingModel(BaseModel):
@@ -127,18 +184,51 @@ class BriefingModel(BaseModel):
             - "GO VFR": Flight is suitable under Visual Flight Rules.
     """
 
-    briefing_id: UUID
-    aircraft: AircraftModel
-    departure_airfield: AirfieldModel
-    arrival_airfield: AirfieldModel
-    recommendation: Literal["NO GO", "GO IFR", "GO VFR"]
+    briefing_id: UUID = Field(
+        default_factory=uuid4,
+        description="Unique briefing ID."
+    )
+    aircraft: AircraftModel = Field(
+        description="Information about the aircraft used for the flight."
+    )
+    departure_airfield: AirfieldModel = Field(
+        description="Data about the departure airfield including weather."
+    )
+    arrival_airfield: AirfieldModel = Field(
+        description="Data about the arrival airfield including weather."
+    )
+    recommendation: Literal["NO GO", "GO IFR", "GO VFR"] = Field(
+        description="Flight recommendation based on the briefing."
+    )
 
 
 class BriefingStatus(Enum):
-    PENDING = "pending"
-    IN_PROGRESS = "in progress"
-    COMPLETE = "complete"
-    ERROR = "error"
+    """
+    Enum representing the various states of a briefing process.
+
+    Attributes:
+        PENDING: Represents a briefing that is yet to start.
+        IN_PROGRESS: Represents a briefing that is currently underway.
+        COMPLETE: Represents a briefing that has been successfully finished.
+        ERROR: Represents a briefing that encountered an error during processing.
+    """
+
+    PENDING = Field(
+        default="pending",
+        description="Indicates that the briefing is awaiting processing."
+    )
+    IN_PROGRESS = Field(
+        default="in progress",
+        description="Indicates that the briefing is currently being processed."
+    )
+    COMPLETE = Field(
+        default="complete",
+        description="Indicates that the briefing has been successfully completed."
+    )
+    ERROR = Field(
+        default="error",
+        description="Indicates that an error occurred during the briefing process."
+    )
 
 
 class InputData(BaseModel):
@@ -152,10 +242,20 @@ class InputData(BaseModel):
     """
 
     departure_airfield: str = Field(
-        min_length=4, max_length=4, pattern=r"^[A-Za-z]{4}$"
+        min_length=4,
+        max_length=4,
+        pattern=r"^[A-Za-z]{4}$",
+        description="The ICAO code of the departure airfield."
     )
-    arrival_airfield: str = Field(min_length=4, max_length=4, pattern=r"^[A-Za-z]{4}$")
-    aircraft_data: AircraftModel
+    arrival_airfield: str = Field(
+        min_length=4,
+        max_length=4,
+        pattern=r"^[A-Za-z]{4}$",
+        description="The ICAO code of the arrival airfield."
+    )
+    aircraft_data: AircraftModel = Field(
+        description="The aircraft data collected according to the AircraftModel structure."
+    )
 
 
 class ApiParams(BaseModel):
@@ -166,7 +266,10 @@ class ApiParams(BaseModel):
         format (str): The expected format of the API response (e.g., "json", "xml"). Defaults to "json".
     """
 
-    format: str = "json"
+    format: str = Field(
+        default="json",
+        description="The expected format of the API response."
+    )
 
 
 class AirfieldParams(ApiParams):
@@ -178,8 +281,13 @@ class AirfieldParams(ApiParams):
         taf (str): Whether to include TAF (Terminal Aerodrome Forecast) data in the response. Defaults to "true".
     """
 
-    ids: str
-    taf: str = "true"
+    ids: str = Field(
+        description="The ICAO identifier of the airfield to query."
+    )
+    taf: str = Field(
+        default="true",
+        description="Weather to include TAF."
+    )
 
 
 class AircraftParams(ApiParams):
@@ -191,8 +299,12 @@ class AircraftParams(ApiParams):
         manufacturer (str): The name of the aircraft manufacturer to filter the results (e.g., "Boeing", "Airbus").
     """
 
-    api_key: str
-    manufacturer: str
+    api_key: str = Field(
+        description="The API key used for authentication and authorization."
+    )
+    manufacturer: str = Field(
+        description="The name of the aircraft manufacturer."
+    )
 
 
 # Helper functions
@@ -267,7 +379,7 @@ class Briefing:
         self.html = HTML(string=html_output)
         return self.html
 
-    def write_briefing_pdf(self) -> Path:
+    def write_briefing_pdf(self) -> str:
         """
         Write the rendered HTML briefing to a PDF file.
 
@@ -287,7 +399,7 @@ class Briefing:
         output_path = Path.cwd() / output_filename
 
         self.html.write_pdf(str(output_path))
-        return output_path
+        return str(output_path)
 
 
 class ApiUrlKey(Enum):
@@ -301,10 +413,22 @@ class ApiUrlKey(Enum):
         AIRCRAFT (str): Environment variable key for the Aircraft API base URL.
     """
 
-    AIRFIELD = "AIRFIELD_API_URL"
-    WEATHER = "WEATHER_API_URL"
-    NOTAM = "NOTAM_API_URL"
-    AIRCRAFT = "AIRCRAFT_API_URL"
+    AIRFIELD = Field(
+        default="AIRFIELD_API_URL",
+        description="Environment variable key for the Airfield API base URL."
+    )
+    WEATHER = Field(
+        default="WEATHER_API_URL",
+        description="Environment variable key for the Weather API base URL."
+    )
+    NOTAM = Field(
+        default="NOTAM_API_URL",
+        description="Environment variable key for the NOTAM API base URL."
+    )
+    AIRCRAFT = Field(
+        default="AIRCRAFT_API_URL",
+        description="Environment variable key for the Aircraft API base URL."
+    )
 
 
 class ApiClient:
@@ -551,7 +675,6 @@ def create_briefing_model(data: InputData, departure_airfield: AirfieldModel, ar
         BriefingModel: A fully populated briefing model with metadata and recommendations.
     """
     return BriefingModel(
-        briefing_id=uuid4(),
         aircraft=data.aircraft_data,
         departure_airfield=departure_airfield,
         arrival_airfield=arrival_airfield,
@@ -653,12 +776,12 @@ def generate_briefing(data: InputData) -> BriefingModel:
 
 
 @app.get(path="/briefing/{briefing_id}/download",
-         response_model=Path,
+         response_class=FileResponse,
          summary="Download a briefing as a PDF",
          description="This endpoint allows you to download a generated flight briefing as a PDF "
                      "using the provided briefing ID. If the briefing ID is invalid, a 404 error will be returned. "
                      "If there are issues during PDF generation, a 500 error will be raised.")
-def download_briefing(briefing_id: str) -> Path:
+async def download_briefing(briefing_id: str) -> FileResponse:
     """
     Downloads the PDF version of a generated flight briefing.
 
@@ -682,7 +805,7 @@ def download_briefing(briefing_id: str) -> Path:
     time.sleep(5)
     briefing_status.update({briefing_id: BriefingStatus.COMPLETE})
 
-    return briefing.write_briefing_pdf()
+    return FileResponse(briefing.write_briefing_pdf())
 
 
 @app.get(path="/briefing/{briefing_id}/status",
