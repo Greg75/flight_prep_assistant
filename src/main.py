@@ -213,22 +213,10 @@ class BriefingStatus(Enum):
         ERROR: Represents a briefing that encountered an error during processing.
     """
 
-    PENDING = Field(
-        default="pending",
-        description="Indicates that the briefing is awaiting processing."
-    )
-    IN_PROGRESS = Field(
-        default="in progress",
-        description="Indicates that the briefing is currently being processed."
-    )
-    COMPLETE = Field(
-        default="complete",
-        description="Indicates that the briefing has been successfully completed."
-    )
-    ERROR = Field(
-        default="error",
-        description="Indicates that an error occurred during the briefing process."
-    )
+    PENDING = "pending"
+    IN_PROGRESS = "in progress"
+    COMPLETE = "complete"
+    ERROR = "error"
 
 
 class InputData(BaseModel):
@@ -256,6 +244,25 @@ class InputData(BaseModel):
     aircraft_data: AircraftModel = Field(
         description="The aircraft data collected according to the AircraftModel structure."
     )
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "departure_airfield": "EPKK",
+                    "arrival_airfield": "EPWR",
+                    "aircraft_data": {
+                        "type": "3XTrim",
+                        "mtow": 495,
+                        "takeoff_distance_at_sea_level": 450,
+                        "landing_distance_at_sea_level": 250,
+                        "stall_speed": 65,
+                        "xwind_max_speed": 12
+                    }
+                }
+            ]
+        }
+    }
 
 
 class ApiParams(BaseModel):
@@ -402,7 +409,7 @@ class Briefing:
         return str(output_path)
 
 
-class ApiUrlKey(Enum):
+class ApiUrlKey(str, Enum):
     """
     Enumeration of environment variable keys that store base URLs for different external APIs.
 
@@ -413,22 +420,10 @@ class ApiUrlKey(Enum):
         AIRCRAFT (str): Environment variable key for the Aircraft API base URL.
     """
 
-    AIRFIELD = Field(
-        default="AIRFIELD_API_URL",
-        description="Environment variable key for the Airfield API base URL."
-    )
-    WEATHER = Field(
-        default="WEATHER_API_URL",
-        description="Environment variable key for the Weather API base URL."
-    )
-    NOTAM = Field(
-        default="NOTAM_API_URL",
-        description="Environment variable key for the NOTAM API base URL."
-    )
-    AIRCRAFT = Field(
-        default="AIRCRAFT_API_URL",
-        description="Environment variable key for the Aircraft API base URL."
-    )
+    AIRFIELD = "AIRFIELD_API_URL"
+    WEATHER = "WEATHER_API_URL"
+    NOTAM = "NOTAM_API_URL"
+    AIRCRAFT = "AIRCRAFT_API_URL"
 
 
 class ApiClient:
@@ -781,7 +776,7 @@ def generate_briefing(data: InputData) -> BriefingModel:
          description="This endpoint allows you to download a generated flight briefing as a PDF "
                      "using the provided briefing ID. If the briefing ID is invalid, a 404 error will be returned. "
                      "If there are issues during PDF generation, a 500 error will be raised.")
-async def download_briefing(briefing_id: str) -> FileResponse:
+def download_briefing(briefing_id: str) -> FileResponse:
     """
     Downloads the PDF version of a generated flight briefing.
 
