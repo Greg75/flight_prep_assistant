@@ -3,7 +3,7 @@ import requests
 import time
 from enum import IntEnum, Enum
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from typing import List, Dict, Self, Optional
@@ -605,6 +605,67 @@ class AirfieldModelBuilder:
             return {}
 
 
+class BriefingGenerator:
+    """
+    A class responsible for generating a flight briefing using airfield and weather data.
+
+    This class builds detailed models for both departure and arrival airfields
+    by integrating airfield metadata and weather conditions through API clients.
+    """
+
+    def __init__(self, data: InputData, airfield_api: ApiClient, weather_api: ApiClient) -> None:
+        """
+        Initialize the BriefingGenerator instance with input data and API clients.
+
+        Args:
+            data (InputData): The input parameters including aircraft, departure, and arrival details.
+            airfield_api (ApiClient): API client for retrieving airfield information.
+            weather_api (ApiClient): API client for retrieving weather data.
+        """
+        self.data = data
+        self.airfield_api = airfield_api
+        self.weather_api = weather_api
+        self.departure_params = AirfieldParams(ids=self.data.departure_airfield)
+        self.arrival_params = AirfieldParams(ids=self.data.arrival_airfield)
+
+    def generate_briefing(self) -> BriefingModel:
+        """
+        Generate the full flight briefing model.
+
+        This method builds the airfield and weather models for both departure and arrival,
+        and constructs the final BriefingModel with a default recommendation.
+
+        Returns:
+            BriefingModel: A structured model containing aircraft, airfield, and weather data.
+        """
+        departure_airfield_model_builder = AirfieldModelBuilder()
+        arrival_airfield_model_builder = AirfieldModelBuilder()
+
+        departure_airfield_model_builder.add_airfield_data(
+            airfield_api=self.airfield_api,
+            params=self.departure_params
+        )
+        departure_airfield_model_builder.add_weather_data(
+            weather_api=self.weather_api,
+            params=self.departure_params
+        )
+        arrival_airfield_model_builder.add_airfield_data(
+            airfield_api=self.airfield_api,
+            params=self.arrival_params
+        )
+        arrival_airfield_model_builder.add_weather_data(
+            weather_api=self.weather_api,
+            params=self.arrival_params
+        )
+
+        return BriefingModel(
+            aircraft=self.data.aircraft_data,
+            departure_airfield=departure_airfield_model_builder.build(),
+            arrival_airfield=arrival_airfield_model_builder.build(),
+            recommendation="NO GO"
+        )
+
+
 def create_airfield_model(airfield_api: ApiClient, weather_api: ApiClient, airfield_api_params: AirfieldParams
                           ) -> AirfieldModel:
     """
@@ -682,38 +743,22 @@ def ping_api() -> dict:
                       "BriefingModel containing all briefing information for the flight.")
 def generate_briefing(data: InputData) -> BriefingModel:
     """
-    Generates a flight briefing based on input data.
+    Generate a flight briefing based on the provided input data.
+
+    This function initializes API clients, invokes the briefing generation logic,
+    stores the result, and returns a structured briefing model.
 
     Args:
-        data (InputData): The input parameters including departure and arrival details.
+        data (InputData): Input parameters including departure, arrival, and other flight-related details.
 
     Returns:
-        BriefingModel: A structured model containing briefing information.
+        BriefingModel: A structured object containing the generated flight briefing.
     """
-    airfield_api = ApiClient(api_url_key=ApiUrlKey.AIRFIELD)
-    weather_api = ApiClient(api_url_key=ApiUrlKey.WEATHER)
-
-    departure_params = AirfieldParams(ids=data.departure_airfield)
-    arrival_params = AirfieldParams(ids=data.arrival_airfield)
-
-    departure_airfield = create_airfield_model(
-        airfield_api=airfield_api,
-        weather_api=weather_api,
-        airfield_api_params=departure_params
-    )
-
-    arrival_airfield = create_airfield_model(
-        airfield_api=airfield_api,
-        weather_api=weather_api,
-        airfield_api_params=arrival_params
-    )
-
-    briefing_model = BriefingModel(
-        aircraft=data.aircraft_data,
-        departure_airfield=departure_airfield,
-        arrival_airfield=arrival_airfield,
-        recommendation="NO GO"
-    )
+    briefing_model = BriefingGenerator(
+        data=data,
+        airfield_api=ApiClient(api_url_key=ApiUrlKey.AIRFIELD),
+        weather_api=ApiClient(api_url_key=ApiUrlKey.WEATHER)
+    ).generate_briefing()
 
     briefing_store.update(
         {
@@ -746,12 +791,12 @@ def download_briefing(briefing_id: str) -> FileResponse:
     briefing_status.update({briefing_id: BriefingStatus.PENDING})
     briefing_model = briefing_store.get(briefing_id)
 
-    time.sleep(15)
+    time.sleep(10)
     briefing_status.update({briefing_id: BriefingStatus.IN_PROGRESS})
     briefing = Briefing(briefing_model)
     briefing.render_briefing_html()
 
-    time.sleep(5)
+    time.sleep(10)
     briefing_status.update({briefing_id: BriefingStatus.COMPLETE})
 
     return FileResponse(briefing.write_briefing_pdf())
