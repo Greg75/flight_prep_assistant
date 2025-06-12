@@ -1,7 +1,7 @@
 import os
 import requests
 import time
-from enum import Enum
+from enum import IntEnum, Enum
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -202,7 +202,7 @@ class BriefingModel(BaseModel):
     )
 
 
-class BriefingStatus(Enum):
+class BriefingStatus(IntEnum):
     """
     Enum representing the various states of a briefing process.
 
@@ -213,10 +213,10 @@ class BriefingStatus(Enum):
         ERROR: Represents a briefing that encountered an error during processing.
     """
 
-    PENDING = "pending"
-    IN_PROGRESS = "in progress"
-    COMPLETE = "complete"
-    ERROR = "error"
+    PENDING = 1
+    IN_PROGRESS = 2
+    COMPLETE = 3
+    ERROR = -1
 
 
 class InputData(BaseModel):
