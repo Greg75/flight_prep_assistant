@@ -605,35 +605,6 @@ class AirfieldModelBuilder:
             return {}
 
 
-def create_api_client() -> tuple[ApiClient, ApiClient]:
-    """
-    Create and return API clients for airfield and weather services.
-
-    Returns:
-        tuple[ApiClient, ApiClient]: A tuple containing the API clients for airfield and weather data respectively.
-    """
-    airfield_api = ApiClient(api_url_key=ApiUrlKey.AIRFIELD)
-    weather_api = ApiClient(api_url_key=ApiUrlKey.WEATHER)
-
-    return airfield_api, weather_api
-
-
-def create_api_params(data: InputData) -> tuple[AirfieldParams, AirfieldParams]:
-    """
-    Generate API parameters for retrieving airfield data based on the input flight data.
-
-    Args:
-        data (InputData): The input data containing identifiers for departure and arrival airfields.
-
-    Returns:
-        tuple[AirfieldParams, AirfieldParams]: A tuple containing the parameters for the departure and arrival airfields.
-    """
-    departure_params = AirfieldParams(ids=data.departure_airfield)
-    arrival_params = AirfieldParams(ids=data.arrival_airfield)
-
-    return departure_params, arrival_params
-
-
 def create_airfield_model(airfield_api: ApiClient, weather_api: ApiClient, airfield_api_params: AirfieldParams
                           ) -> AirfieldModel:
     """
@@ -654,27 +625,6 @@ def create_airfield_model(airfield_api: ApiClient, weather_api: ApiClient, airfi
     airfield_model = airfield_model_builder.build()
 
     return airfield_model
-
-
-def create_briefing_model(data: InputData, departure_airfield: AirfieldModel, arrival_airfield: AirfieldModel
-                          ) -> BriefingModel:
-    """
-    Create a briefing model that consolidates all necessary flight information.
-
-    Args:
-        data (InputData): The input flight data including aircraft information.
-        departure_airfield (AirfieldModel): The model for the departure airfield.
-        arrival_airfield (AirfieldModel): The model for the arrival airfield.
-
-    Returns:
-        BriefingModel: A fully populated briefing model with metadata and recommendations.
-    """
-    return BriefingModel(
-        aircraft=data.aircraft_data,
-        departure_airfield=departure_airfield,
-        arrival_airfield=arrival_airfield,
-        recommendation="NO GO"
-    )
 
 
 def create_briefing(briefing_model: BriefingModel) -> Briefing:
@@ -740,8 +690,11 @@ def generate_briefing(data: InputData) -> BriefingModel:
     Returns:
         BriefingModel: A structured model containing briefing information.
     """
-    airfield_api, weather_api = create_api_client()
-    departure_params, arrival_params = create_api_params(data=data)
+    airfield_api = ApiClient(api_url_key=ApiUrlKey.AIRFIELD)
+    weather_api = ApiClient(api_url_key=ApiUrlKey.WEATHER)
+
+    departure_params = AirfieldParams(ids=data.departure_airfield)
+    arrival_params = AirfieldParams(ids=data.arrival_airfield)
 
     departure_airfield = create_airfield_model(
         airfield_api=airfield_api,
@@ -755,10 +708,11 @@ def generate_briefing(data: InputData) -> BriefingModel:
         airfield_api_params=arrival_params
     )
 
-    briefing_model = create_briefing_model(
-        data=data,
+    briefing_model = BriefingModel(
+        aircraft=data.aircraft_data,
         departure_airfield=departure_airfield,
-        arrival_airfield=arrival_airfield
+        arrival_airfield=arrival_airfield,
+        recommendation="NO GO"
     )
 
     briefing_store.update(
