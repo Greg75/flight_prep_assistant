@@ -1,20 +1,29 @@
+import logging
 import os
-import requests
 import time
-from enum import IntEnum, Enum
+from datetime import datetime
+from enum import Enum, IntEnum
+from functools import wraps
+from pathlib import Path
+from typing import Dict, List, Literal, Optional, Self
+from uuid import UUID, uuid4
+
+import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
-from typing import List, Dict, Self, Optional
-from weasyprint import HTML
 from jinja2 import Environment, FileSystemLoader
-from pathlib import Path
-from datetime import datetime
-from typing import Literal
-from uuid import UUID, uuid4
+from pydantic import BaseModel, Field
+from starlette.requests import Request
+from weasyprint import HTML
 
 load_dotenv()
+
+# Logger configuration
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO, format="%(levelname)s:  %(asctime)s - %(message)s"
+)
 
 
 # Models classes
@@ -32,22 +41,20 @@ class RunwayModel(BaseModel):
     direction: Optional[str] = Field(
         default=None,
         pattern=r"^\d{2,3}|\d{2}[L|R]/\d{2,3}|\d{2}[L|R]$",
-        description="The runway's direction identifier."
+        description="The runway's direction identifier.",
     )
     length: Optional[str] = Field(
         default=None,
         pattern=r"^\d{3,5}$",
-        description="The total length of the runway in feet."
+        description="The total length of the runway in feet.",
     )
     width: Optional[str] = Field(
-        default=None,
-        pattern=r"^\d{2,3}$",
-        description="The width of the runway."
+        default=None, pattern=r"^\d{2,3}$", description="The width of the runway."
     )
     surface: Optional[str] = Field(
         default=None,
         pattern=r"^[a-zA-Z]{1,99}$",
-        description="The surface type of the runway."
+        description="The surface type of the runway.",
     )
 
 
@@ -62,12 +69,9 @@ class WindModel(BaseModel):
 
     direction: Optional[int | str] = Field(
         default=None,
-        description="Direction from which wind is blowing or descriptive text."
+        description="Direction from which wind is blowing or descriptive text.",
     )
-    speed: Optional[float] = Field(
-        default=None,
-        description="Wind speed in knots."
-    )
+    speed: Optional[float] = Field(default=None, description="Wind speed in knots.")
 
 
 class FrequencyModel(BaseModel):
@@ -78,10 +82,7 @@ class FrequencyModel(BaseModel):
         twr (str): Tower frequency.
     """
 
-    twr: Optional[str] = Field(
-        default=None,
-        description="Tower frequency."
-    )
+    twr: Optional[str] = Field(default=None, description="Tower frequency.")
 
     model_config = {"extra": "allow"}
 
@@ -102,33 +103,25 @@ class AirfieldModel(BaseModel):
     """
 
     icaoId: Optional[str] = Field(
-        default=None,
-        description="The ICAO identifier of the airfield."
+        default=None, description="The ICAO identifier of the airfield."
     )
-    runway: List[RunwayModel] = Field(
-        description="A list of runways at the airfield."
-    )
+    runway: List[RunwayModel] = Field(description="A list of runways at the airfield.")
     elevation: Optional[int] = Field(
-        default=None,
-        description="Elevation of the airfield above the sea level."
+        default=None, description="Elevation of the airfield above the sea level."
     )
-    wind: WindModel = Field(
-        description="Current wind conditions, direction and speed."
-    )
+    wind: WindModel = Field(description="Current wind conditions, direction and speed.")
     temperature: Optional[float] = Field(
         default=None,
-        description="Current temperature at the airfield in degrees Celsius."
+        description="Current temperature at the airfield in degrees Celsius.",
     )
     frequency: FrequencyModel = Field(
         description="Communication frequencies for the airfield."
     )
     metar: Optional[str] = Field(
-        default=None,
-        description="The latest METAR weather report for the airfield."
+        default=None, description="The latest METAR weather report for the airfield."
     )
     taf: Optional[str] = Field(
-        default=None,
-        description="The latest TAF report for the airfield."
+        default=None, description="The latest TAF report for the airfield."
     )
 
 
@@ -145,22 +138,15 @@ class AircraftModel(BaseModel):
         xwind_max_speed (float): Maximum crosswind speed the aircraft can handle, in knots.
     """
 
-    type: str = Field(
-        min_length=3,
-        description="Aircraft type or model name."
-    )
-    mtow: int = Field(
-        description="Maximum takeoff weight in kilograms or pounds."
-    )
+    type: str = Field(min_length=3, description="Aircraft type or model name.")
+    mtow: int = Field(description="Maximum takeoff weight in kilograms or pounds.")
     takeoff_distance_at_sea_level: int = Field(
         description="Required takeoff distance at sea level under standard conditions."
     )
     landing_distance_at_sea_level: int = Field(
         description="Required landing distance at sea level under standard conditions."
     )
-    stall_speed: int = Field(
-        description="Stall speed of the aircraft in knots."
-    )
+    stall_speed: int = Field(description="Stall speed of the aircraft in knots.")
     xwind_max_speed: float = Field(
         description="Maximum crosswinds speed the aircraft can handle, in knots."
     )
@@ -184,10 +170,7 @@ class BriefingModel(BaseModel):
             - "GO VFR": Flight is suitable under Visual Flight Rules.
     """
 
-    briefing_id: UUID = Field(
-        default_factory=uuid4,
-        description="Unique briefing ID."
-    )
+    briefing_id: UUID = Field(default_factory=uuid4, description="Unique briefing ID.")
     aircraft: AircraftModel = Field(
         description="Information about the aircraft used for the flight."
     )
@@ -233,13 +216,13 @@ class InputData(BaseModel):
         min_length=4,
         max_length=4,
         pattern=r"^[A-Za-z]{4}$",
-        description="The ICAO code of the departure airfield."
+        description="The ICAO code of the departure airfield.",
     )
     arrival_airfield: str = Field(
         min_length=4,
         max_length=4,
         pattern=r"^[A-Za-z]{4}$",
-        description="The ICAO code of the arrival airfield."
+        description="The ICAO code of the arrival airfield.",
     )
     aircraft_data: AircraftModel = Field(
         description="The aircraft data collected according to the AircraftModel structure."
@@ -257,8 +240,8 @@ class InputData(BaseModel):
                         "takeoff_distance_at_sea_level": 450,
                         "landing_distance_at_sea_level": 250,
                         "stall_speed": 65,
-                        "xwind_max_speed": 12
-                    }
+                        "xwind_max_speed": 12,
+                    },
                 }
             ]
         }
@@ -274,8 +257,7 @@ class ApiParams(BaseModel):
     """
 
     format: str = Field(
-        default="json",
-        description="The expected format of the API response."
+        default="json", description="The expected format of the API response."
     )
 
 
@@ -288,13 +270,8 @@ class AirfieldParams(ApiParams):
         taf (str): Whether to include TAF (Terminal Aerodrome Forecast) data in the response. Defaults to "true".
     """
 
-    ids: str = Field(
-        description="The ICAO identifier of the airfield to query."
-    )
-    taf: str = Field(
-        default="true",
-        description="Weather to include TAF."
-    )
+    ids: str = Field(description="The ICAO identifier of the airfield to query.")
+    taf: str = Field(default="true", description="Weather to include TAF.")
 
 
 class AircraftParams(ApiParams):
@@ -309,9 +286,7 @@ class AircraftParams(ApiParams):
     api_key: str = Field(
         description="The API key used for authentication and authorization."
     )
-    manufacturer: str = Field(
-        description="The name of the aircraft manufacturer."
-    )
+    manufacturer: str = Field(description="The name of the aircraft manufacturer.")
 
 
 # Helper functions
@@ -342,6 +317,36 @@ def get_input() -> InputData:
         arrival_airfield=arrival_airfield,
         aircraft_data=aircraft_data,
     )
+
+
+def get_time(func):
+    """
+    Decorator that measures and logs the execution time of the decorated function.
+
+    Uses high-resolution timer (`time.perf_counter_ns`) to calculate elapsed time
+    in seconds with nanosecond precision. The timing result is logged using the `logger`.
+
+    Args:
+        func (Callable): The function to wrap and time.
+
+    Returns:
+        Callable: The wrapped function with execution time logging.
+
+    Example:
+        @get_time
+        def compute():
+            # some expensive operation
+            pass
+    """
+    @wraps(func)
+    def inner(*args, **kwargs):
+        start_time = time.perf_counter_ns()
+        result = func(*args, **kwargs)
+        elapsed = time.perf_counter_ns() - start_time
+        logger.info(f"Time elapsed for {func.__name__}: {elapsed * 1e-9:8f} s.")
+        return result
+
+    return inner
 
 
 # Base classes
@@ -397,7 +402,9 @@ class Briefing:
             Path: The file path of the generated PDF.
         """
         if self.html is None:
-            raise ValueError("HTML content is not rendered. Call render_briefing_html() first.")
+            raise ValueError(
+                "HTML content is not rendered. Call render_briefing_html() first."
+            )
 
         dep_icao = self.departure.get("icaoId", None)
         arr_icao = self.arrival.get("icaoId", None)
@@ -481,7 +488,9 @@ class AirfieldModelBuilder:
         """
         self.airfield_records = {}
 
-    def add_airfield_data(self, airfield_api: ApiClient, params: AirfieldParams) -> Self:
+    def add_airfield_data(
+        self, airfield_api: ApiClient, params: AirfieldParams
+    ) -> Self:
         """
         Loads airfield data from the provided API and updates internal records.
 
@@ -613,7 +622,9 @@ class BriefingGenerator:
     by integrating airfield metadata and weather conditions through API clients.
     """
 
-    def __init__(self, data: InputData, airfield_api: ApiClient, weather_api: ApiClient) -> None:
+    def __init__(
+        self, data: InputData, airfield_api: ApiClient, weather_api: ApiClient
+    ) -> None:
         """
         Initialize the BriefingGenerator instance with input data and API clients.
 
@@ -642,32 +653,29 @@ class BriefingGenerator:
         arrival_airfield_model_builder = AirfieldModelBuilder()
 
         departure_airfield_model_builder.add_airfield_data(
-            airfield_api=self.airfield_api,
-            params=self.departure_params
+            airfield_api=self.airfield_api, params=self.departure_params
         )
         departure_airfield_model_builder.add_weather_data(
-            weather_api=self.weather_api,
-            params=self.departure_params
+            weather_api=self.weather_api, params=self.departure_params
         )
         arrival_airfield_model_builder.add_airfield_data(
-            airfield_api=self.airfield_api,
-            params=self.arrival_params
+            airfield_api=self.airfield_api, params=self.arrival_params
         )
         arrival_airfield_model_builder.add_weather_data(
-            weather_api=self.weather_api,
-            params=self.arrival_params
+            weather_api=self.weather_api, params=self.arrival_params
         )
 
         return BriefingModel(
             aircraft=self.data.aircraft_data,
             departure_airfield=departure_airfield_model_builder.build(),
             arrival_airfield=arrival_airfield_model_builder.build(),
-            recommendation="NO GO"
+            recommendation="NO GO",
         )
 
 
-def create_airfield_model(airfield_api: ApiClient, weather_api: ApiClient, airfield_api_params: AirfieldParams
-                          ) -> AirfieldModel:
+def create_airfield_model(
+    airfield_api: ApiClient, weather_api: ApiClient, airfield_api_params: AirfieldParams
+) -> AirfieldModel:
     """
     Build an AirfieldModel using the given API clients and parameters.
 
@@ -680,8 +688,12 @@ def create_airfield_model(airfield_api: ApiClient, weather_api: ApiClient, airfi
         AirfieldModel: A model combining both airfield and weather data for the specified location.
     """
     airfield_model_builder = AirfieldModelBuilder()
-    airfield_model_builder.add_airfield_data(airfield_api=airfield_api, params=airfield_api_params)
-    airfield_model_builder.add_weather_data(weather_api=weather_api, params=airfield_api_params)
+    airfield_model_builder.add_airfield_data(
+        airfield_api=airfield_api, params=airfield_api_params
+    )
+    airfield_model_builder.add_weather_data(
+        weather_api=weather_api, params=airfield_api_params
+    )
 
     airfield_model = airfield_model_builder.build()
 
@@ -707,10 +719,12 @@ briefing_store: Dict[str, BriefingModel] = {}
 briefing_status: Dict[str, BriefingStatus] = {}
 
 
-@app.get(path="/",
-         summary="Root endpoint for Briefing API",
-         description="This is the root endpoint of the Briefing API. It simply returns a message indicating "
-                     "that the API is running and operational.")
+@app.get(
+    path="/",
+    summary="Root endpoint for Briefing API",
+    description="This is the root endpoint of the Briefing API. It simply returns a message indicating "
+    "that the API is running and operational.",
+)
 def root() -> dict:
     """
     Root endpoint for the Briefing API.
@@ -718,13 +732,16 @@ def root() -> dict:
     Returns:
         dict: A simple message indicating that the API is running.
     """
+    logger.info("Root endpoint accessed: Briefing API is running.")
     return {"message": "Briefing API is running."}
 
 
-@app.get(path="/ping",
-         summary="Ping the API to check its health",
-         description="This endpoint returns a status message indicating that the API is healthy and responsive. "
-                     "It's often used to check if the API is up and running.")
+@app.get(
+    path="/ping",
+    summary="Ping the API to check its health",
+    description="This endpoint returns a status message indicating that the API is healthy and responsive. "
+    "It's often used to check if the API is up and running.",
+)
 def ping_api() -> dict:
     """
     Health check endpoint to verify the API is responsive.
@@ -732,15 +749,18 @@ def ping_api() -> dict:
     Returns:
         dict: A status message indicating the API is healthy.
     """
+    logger.info("Health check ping received: API is responsive.")
     return {"status": "healthy"}
 
 
-@app.post(path="/generate",
-          response_model=BriefingModel,
-          summary="Generate a flight briefing based on input data",
-          description="This endpoint generates a flight briefing based on the provided input data, "
-                      "including details like departure and arrival airfields. It returns a structured "
-                      "BriefingModel containing all briefing information for the flight.")
+@app.post(
+    path="/generate",
+    response_model=BriefingModel,
+    summary="Generate a flight briefing based on input data",
+    description="This endpoint generates a flight briefing based on the provided input data, "
+    "including details like departure and arrival airfields. It returns a structured "
+    "BriefingModel containing all briefing information for the flight.",
+)
 def generate_briefing(data: InputData) -> BriefingModel:
     """
     Generate a flight briefing based on the provided input data.
@@ -754,32 +774,36 @@ def generate_briefing(data: InputData) -> BriefingModel:
     Returns:
         BriefingModel: A structured object containing the generated flight briefing.
     """
-    briefing_model = BriefingGenerator(
+    briefing = BriefingGenerator(
         data=data,
         airfield_api=ApiClient(api_url_key=ApiUrlKey.AIRFIELD),
-        weather_api=ApiClient(api_url_key=ApiUrlKey.WEATHER)
+        weather_api=ApiClient(api_url_key=ApiUrlKey.WEATHER),
     ).generate_briefing()
 
-    briefing_store.update(
-        {
-            str(briefing_model.briefing_id): briefing_model
-        }
-    )
+    briefing_id = str(briefing.briefing_id)
+    logger.info(f"Briefing successfully generated | ID: {briefing_id}.")
 
-    return briefing_model
+    briefing_store.update({briefing_id: briefing})
+    logger.info(f"Briefing stored in memory store | ID: {briefing_id}.")
+
+    return briefing
 
 
-@app.get(path="/briefing/{briefing_id}/download",
-         response_class=FileResponse,
-         summary="Download a briefing as a PDF",
-         description="This endpoint allows you to download a generated flight briefing as a PDF "
-                     "using the provided briefing ID. If the briefing ID is invalid, a 404 error will be returned. "
-                     "If there are issues during PDF generation, a 500 error will be raised.")
-def download_briefing(briefing_id: str) -> FileResponse:
+@app.get(
+    path="/briefing/{briefing_id}/download",
+    response_class=FileResponse,
+    summary="Download a briefing as a PDF",
+    description="This endpoint allows you to download a generated flight briefing as a PDF "
+    "using the provided briefing ID. If the briefing ID is invalid, a 404 error will be returned. "
+    "If there are issues during PDF generation, a 500 error will be raised.",
+)
+@get_time
+def download_briefing(request: Request, briefing_id: str) -> FileResponse:
     """
     Downloads the PDF version of a generated flight briefing.
 
     Args:
+        request (Request): .
         briefing_id (str): The ID of the briefing to download.
 
     Returns:
@@ -788,25 +812,36 @@ def download_briefing(briefing_id: str) -> FileResponse:
     Raises:
         HTTPException: If the briefing ID is not found or PDF generation fails.
     """
+    logger.info(
+        f"[{request.client.host}] Briefing download requested | ID: {briefing_id} | Status: PENDING"
+    )
     briefing_status.update({briefing_id: BriefingStatus.PENDING})
     briefing_model = briefing_store.get(briefing_id)
 
     time.sleep(10)
+    logger.info(
+        f"[{request.client.host}] Briefing PDF rendering started | ID: {briefing_id} | Status: IN_PROGRESS"
+    )
     briefing_status.update({briefing_id: BriefingStatus.IN_PROGRESS})
     briefing = Briefing(briefing_model)
     briefing.render_briefing_html()
 
     time.sleep(10)
+    logger.info(
+        f"[{request.client.host}] Briefing PDF generation complete | ID: {briefing_id} | Status: COMPLETE"
+    )
     briefing_status.update({briefing_id: BriefingStatus.COMPLETE})
 
     return FileResponse(briefing.write_briefing_pdf())
 
 
-@app.get(path="/briefing/{briefing_id}/status",
-         summary="Check the status of a briefing",
-         description="This endpoint allows you to retrieve the current status of a briefing by providing "
-                     "the briefing ID. If the briefing ID exists, it returns the corresponding status. "
-                     "If the briefing ID is invalid, the status will be `None` or an error.")
+@app.get(
+    path="/briefing/{briefing_id}/status",
+    summary="Check the status of a briefing",
+    description="This endpoint allows you to retrieve the current status of a briefing by providing "
+    "the briefing ID. If the briefing ID exists, it returns the corresponding status. "
+    "If the briefing ID is invalid, the status will be `None` or an error.",
+)
 def check_status(briefing_id: str) -> dict:
     """
     Check the current status of a briefing.
@@ -817,7 +852,12 @@ def check_status(briefing_id: str) -> dict:
     Returns:
         dict: A dictionary containing the briefing ID and its current status.
     """
-    return {briefing_id: briefing_status.get(briefing_id)}
+    status = briefing_status.get(briefing_id)
+    logger.info(
+        f"Briefing status queried | ID: {briefing_id} | Current Status: {status}."
+    )
+
+    return {briefing_id: status}
 
 
 if __name__ == "__main__":
