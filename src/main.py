@@ -1,9 +1,11 @@
 import logging
 import os
+import sys
 import time
 from datetime import datetime
 from enum import Enum, IntEnum
 from functools import wraps
+from http.client import HTTPException
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Self
 from uuid import UUID, uuid4
@@ -12,18 +14,38 @@ import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, TemplateError
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 from weasyprint import HTML
 
 load_dotenv()
 
-# Logger configuration
+# Creating a logger
 logger = logging.getLogger(__name__)
-logging.basicConfig(
-    level=logging.INFO, format="%(levelname)s:  %(asctime)s - %(message)s"
+logger.setLevel(logging.DEBUG)
+
+# Creating a console and file handlers
+console_handler = logging.StreamHandler(stream=sys.stdout)
+file_handler = logging.FileHandler(filename="flight_prep_assistant.log", encoding="utf-8")
+
+# Setting logging levels
+console_handler.setLevel(logging.INFO)
+file_handler.setLevel(logging.ERROR)
+
+# Define a formatter
+formatter = logging.Formatter(
+    fmt="%(levelname)s: %(name)s - %(asctime)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
 )
+
+# Apply formatter to both console and file handlers
+console_handler.setFormatter(formatter)
+file_handler.setFormatter(formatter)
+
+# Add handlers to the logger
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
 
 
 # Models classes
@@ -341,11 +363,12 @@ def get_time(func):
     @wraps(func)
     def inner(*args, **kwargs):
         start_time = time.perf_counter_ns()
+        logger.info(f"[Timing] Started '{func.__name__}' at {start_time} ns.")
         result = func(*args, **kwargs)
-        elapsed = time.perf_counter_ns() - start_time
-        logger.info(f"Time elapsed for {func.__name__}: {elapsed * 1e-9:8f} s.")
+        elapsed_ns = time.perf_counter_ns() - start_time
+        elapsed_sec = elapsed_ns * 1e-9
+        logger.info(f"[Timing] Completed '{func.__name__}' | Duration: {elapsed_sec:.6f} s ({elapsed_ns} ns).")
         return result
-
     return inner
 
 
@@ -365,11 +388,14 @@ class Briefing:
         Args:
             briefing_model (BriefingModel): An instance containing briefing data.
         """
-        self.briefing = briefing_model
-        self.aircraft = briefing_model.aircraft.model_dump()
-        self.departure = briefing_model.departure_airfield.model_dump()
-        self.arrival = briefing_model.arrival_airfield.model_dump()
-        self.html: Optional[HTML] = None
+        try:
+            self.briefing = briefing_model
+            self.aircraft = briefing_model.aircraft.model_dump()
+            self.departure = briefing_model.departure_airfield.model_dump()
+            self.arrival = briefing_model.arrival_airfield.model_dump()
+            self.html: Optional[HTML] = None
+        except AttributeError as err:
+            logger.error(f"Unable to initialize Briefing. Incomplete BriefingModel | Error: {err}")
 
     def render_briefing_html(self) -> HTML:
         """
@@ -380,16 +406,25 @@ class Briefing:
         """
         template_dir = Path(__file__).parent
         environment = Environment(loader=FileSystemLoader(template_dir))
-        template = environment.get_template("briefing.html")
 
-        html_output = template.render(
-            departure=self.departure,
-            arrival=self.arrival,
-            aircraft=self.aircraft,
-        )
+        try:
+            template = environment.get_template("briefing.html")
+            html_output = template.render(
+                departure=self.departure,
+                arrival=self.arrival,
+                aircraft=self.aircraft,
+            )
 
-        self.html = HTML(string=html_output)
-        return self.html
+            self.html = HTML(string=html_output)
+            return self.html
+
+        except AttributeError as err:
+            logger.error(f"Failed to render briefing HTML | Error: {err}")
+            raise RuntimeError("Failed to render briefing HTML. Check data structure.") from err
+
+        except TemplateError as err:
+            logger.error(f"Failed to render briefing HTML | Error: {err}")
+            raise RuntimeError("Failed to render briefing HTML. Check template structure.") from err
 
     def write_briefing_pdf(self) -> str:
         """
@@ -732,7 +767,7 @@ def root() -> dict:
     Returns:
         dict: A simple message indicating that the API is running.
     """
-    logger.info("Root endpoint accessed: Briefing API is running.")
+    logger.info("Root endpoint accessed: Briefing API is running")
     return {"message": "Briefing API is running."}
 
 
@@ -749,7 +784,7 @@ def ping_api() -> dict:
     Returns:
         dict: A status message indicating the API is healthy.
     """
-    logger.info("Health check ping received: API is responsive.")
+    logger.info("Health check ping received: API is responsive")
     return {"status": "healthy"}
 
 
@@ -774,19 +809,29 @@ def generate_briefing(data: InputData) -> BriefingModel:
     Returns:
         BriefingModel: A structured object containing the generated flight briefing.
     """
-    briefing = BriefingGenerator(
-        data=data,
-        airfield_api=ApiClient(api_url_key=ApiUrlKey.AIRFIELD),
-        weather_api=ApiClient(api_url_key=ApiUrlKey.WEATHER),
-    ).generate_briefing()
+    try:
+        briefing = BriefingGenerator(
+            data=data,
+            airfield_api=ApiClient(api_url_key=ApiUrlKey.AIRFIELD),
+            weather_api=ApiClient(api_url_key=ApiUrlKey.WEATHER),
+        ).generate_briefing()
 
-    briefing_id = str(briefing.briefing_id)
-    logger.info(f"Briefing successfully generated | ID: {briefing_id}.")
+    except HTTPException as exp:
+        logger.warning(f"Briefing generation failed due to HTTP error | Details: {exp}")
+        raise RuntimeError("Unable to generate briefing")
 
-    briefing_store.update({briefing_id: briefing})
-    logger.info(f"Briefing stored in memory store | ID: {briefing_id}.")
+    except Exception as exp:
+        logger.error(msg=f"Unexpected error during briefing generation | Error: {exp}", exc_info=True)
+        raise RuntimeError("Unexpected error during briefing generation")
 
-    return briefing
+    else:
+        briefing_id = str(briefing.briefing_id)
+        logger.info(f"Briefing generated successfully | ID: {briefing_id}")
+
+        briefing_store.update({briefing_id: briefing})
+        logger.info(f"Briefing saved to in-memory store | ID: {briefing_id}")
+
+        return briefing
 
 
 @app.get(
@@ -812,27 +857,35 @@ def download_briefing(request: Request, briefing_id: str) -> FileResponse:
     Raises:
         HTTPException: If the briefing ID is not found or PDF generation fails.
     """
-    logger.info(
-        f"[{request.client.host}] Briefing download requested | ID: {briefing_id} | Status: PENDING"
-    )
-    briefing_status.update({briefing_id: BriefingStatus.PENDING})
-    briefing_model = briefing_store.get(briefing_id)
+    # Dummy request
+    _ = request.client.host
 
-    time.sleep(10)
-    logger.info(
-        f"[{request.client.host}] Briefing PDF rendering started | ID: {briefing_id} | Status: IN_PROGRESS"
-    )
-    briefing_status.update({briefing_id: BriefingStatus.IN_PROGRESS})
-    briefing = Briefing(briefing_model)
-    briefing.render_briefing_html()
+    try:
+        briefing_model = briefing_store.get(briefing_id)
+    except KeyError as err:
+        logger.error(f"Failed to retrieve briefing model | ID: {briefing_id} | Error: {err}")
+        raise RuntimeError(f"Invalid key. Unable to fetch the briefing model | Error: {err}")
+    else:
+        # Update and log status: PENDING
+        briefing_status.update({briefing_id: BriefingStatus.PENDING})
+        logger.info(f"Briefing download requested | ID: {briefing_id} | Status: PENDING")
 
-    time.sleep(10)
-    logger.info(
-        f"[{request.client.host}] Briefing PDF generation complete | ID: {briefing_id} | Status: COMPLETE"
-    )
-    briefing_status.update({briefing_id: BriefingStatus.COMPLETE})
+        time.sleep(10)
 
-    return FileResponse(briefing.write_briefing_pdf())
+        # Update and log status: IN_PROGRESS
+        briefing_status.update({briefing_id: BriefingStatus.IN_PROGRESS})
+        logger.info(f"Briefing rendering started | ID: {briefing_id} | Status: IN_PROGRESS")
+
+        briefing = Briefing(briefing_model)
+        briefing.render_briefing_html()
+
+        time.sleep(10)
+
+        # Update and log status: COMPLETE
+        briefing_status.update({briefing_id: BriefingStatus.COMPLETE})
+        logger.info(f"Briefing generation complete | ID: {briefing_id} | Status: COMPLETE")
+
+        return FileResponse(briefing.write_briefing_pdf())
 
 
 @app.get(
@@ -852,12 +905,17 @@ def check_status(briefing_id: str) -> dict:
     Returns:
         dict: A dictionary containing the briefing ID and its current status.
     """
-    status = briefing_status.get(briefing_id)
-    logger.info(
-        f"Briefing status queried | ID: {briefing_id} | Current Status: {status}."
-    )
+    try:
+        status = briefing_status.get(briefing_id)
+    except KeyError as err:
+        logger.error(f"Failed to retrieve status for briefing ID '{briefing_id}': {err}")
+        raise RuntimeError(f"Invalid key. Unable to fetch the briefing status | Error: {err}")
+    else:
+        logger.info(
+            f"Briefing status retrieved | ID: {briefing_id} | Current Status: {status}"
+        )
 
-    return {briefing_id: status}
+        return {briefing_id: status}
 
 
 if __name__ == "__main__":
