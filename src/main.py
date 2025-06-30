@@ -7,14 +7,14 @@ from enum import Enum, IntEnum
 from functools import wraps
 from http.client import HTTPException
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Self
+from typing import Dict, List, Literal, Optional, Self, Callable
 from uuid import UUID, uuid4
 
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
-from jinja2 import Environment, FileSystemLoader, TemplateError
+from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 from weasyprint import HTML
@@ -27,7 +27,9 @@ logger.setLevel(logging.DEBUG)
 
 # Creating a console and file handlers
 console_handler = logging.StreamHandler(stream=sys.stdout)
-file_handler = logging.FileHandler(filename="flight_prep_assistant.log", encoding="utf-8")
+file_handler = logging.FileHandler(
+    filename="flight_prep_assistant.log", encoding="utf-8"
+)
 
 # Setting logging levels
 console_handler.setLevel(logging.INFO)
@@ -35,8 +37,9 @@ file_handler.setLevel(logging.ERROR)
 
 # Define a formatter
 formatter = logging.Formatter(
-    fmt="%(levelname)s: %(name)s - %(asctime)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
+    fmt="{levelname}: {name} - {asctime} - {message}",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    style="{",
 )
 
 # Apply formatter to both console and file handlers
@@ -203,7 +206,8 @@ class BriefingModel(BaseModel):
         description="Data about the arrival airfield including weather."
     )
     recommendation: Literal["NO GO", "GO IFR", "GO VFR"] = Field(
-        description="Flight recommendation based on the briefing."
+        description="Flight recommendation based on the briefing.",
+        default="NO GO",
     )
 
 
@@ -311,6 +315,85 @@ class AircraftParams(ApiParams):
     manufacturer: str = Field(description="The name of the aircraft manufacturer.")
 
 
+# Custom exceptions classes
+class BriefingError(Exception):
+    """Base exception for all briefing-related errors."""
+
+    code = 100
+    default_message = "An unknown briefing error occurred."
+
+    def __init__(self, message: str | None = None) -> None:
+        self.message = message or self.default_message
+        super().__init__(self.message)
+
+
+class BriefingModelError(BriefingError):
+    """Raised when the BriefingModel is invalid or incomplete."""
+
+    code = 101
+    default_message = "Briefing model is invalid or incomplete."
+
+
+class HTMLRenderError(BriefingError):
+    """Raised when briefing HTML rendering fails."""
+
+    code = 102
+    default_message = (
+        "Failed to render briefing HTML. Check template and data structure."
+    )
+
+
+class PDFGenerationError(BriefingError):
+    """Raised when PDF generation fails."""
+
+    code = 103
+    default_message = "Failed to generate PDF."
+
+
+class MissingEnvironmentVariableError(BriefingError):
+    """Raised when an expected environment variable is not set."""
+
+    code = 104
+    default_message = "Missing required environment variable."
+
+
+class ApiRequestError(BriefingError):
+    """Raised when an API request fails."""
+
+    code = 105
+    default_message = "API request failed."
+
+
+class DataParsingError(BriefingError):
+    """Raised when external data can't be parsed into expected format."""
+
+    code = 106
+    default_message = "Failed to parse external data into expected format."
+
+
+class AirfieldModelBuildError(BriefingError):
+    """Raised when airfield model cannot be built from available data."""
+
+    code = 107
+    default_message = "Failed to build airfield model. Missing valid ICAO code."
+
+
+class BriefingNotFoundError(BriefingError):
+    """Raised when a requested briefing is not found."""
+
+    code = 108
+    default_message = "Briefing with requested ID not found."
+
+
+class BriefingStatusError(BriefingError):
+    """Raised when there's a problem retrieving or setting briefing status."""
+
+    code = 109
+    default_message = (
+        "Unable to fetch the briefing status. Briefing with requested ID not found."
+    )
+
+
 # Helper functions
 def get_input() -> InputData:
     """
@@ -324,7 +407,9 @@ def get_input() -> InputData:
         - Raises a ValidationError if the input does not meet the model's constraints.
     """
     departure_airfield = input("Departure airfield ICAO code: ").upper()
+    logger.info(f"Departure airfield ICAO code: {departure_airfield}")
     arrival_airfield = input("Arrival airfield ICAO code: ").upper()
+    logger.info(f"Arrival airfield ICAO code: {departure_airfield}")
     aircraft_data = AircraftModel(
         type=input("Aircraft type: "),
         mtow=int(input("Max takeoff weight: ")),
@@ -333,6 +418,7 @@ def get_input() -> InputData:
         stall_speed=int(input("Stall speed: ")),
         xwind_max_speed=float(input("Max crosswind speed: ")),
     )
+    logger.info(f"Aircraft data: {aircraft_data}")
 
     return InputData(
         departure_airfield=departure_airfield,
@@ -341,7 +427,7 @@ def get_input() -> InputData:
     )
 
 
-def get_time(func):
+def get_time(func: Callable) -> Callable:
     """
     Decorator that measures and logs the execution time of the decorated function.
 
@@ -360,6 +446,9 @@ def get_time(func):
             # some expensive operation
             pass
     """
+    if not isinstance(func, Callable):
+        raise Exception(f"'{func.__name__}' is not callable.")
+
     @wraps(func)
     def inner(*args, **kwargs):
         start_time = time.perf_counter_ns()
@@ -367,13 +456,51 @@ def get_time(func):
         result = func(*args, **kwargs)
         elapsed_ns = time.perf_counter_ns() - start_time
         elapsed_sec = elapsed_ns * 1e-9
-        logger.info(f"[Timing] Completed '{func.__name__}' | Duration: {elapsed_sec:.6f} s ({elapsed_ns} ns).")
+        logger.info(
+            f"[Timing] Completed '{func.__name__}' | Duration: {elapsed_sec:.6f} s ({elapsed_ns} ns)."
+        )
         return result
+
+    return inner
+
+
+def add_logger(func: Callable) -> Callable:
+    """
+    A decorator that logs the start, successful end, and any exceptions raised during
+    the execution of the decorated function.
+
+    The log includes the function name, passed arguments, and exception details (if any).
+
+    Args:
+        func (Callable): The function to be decorated.
+
+    Returns:
+        Callable: The wrapped function with logging behavior.
+    """
+
+    @wraps(func)
+    def inner(*args, **kwargs):
+        logger.info(
+            f"[Start] '{func.__name__}' started with args={args} and kwargs={kwargs}."
+        )
+        try:
+            result = get_time(func)(*args, **kwargs)
+        except Exception as exp:
+            logger.exception(f"'{func.__name__}' raised an exception: {exp}.")
+        else:
+            logger.info(f"[End] '{func.__name__}' ended successfully.")
+            return result
+
     return inner
 
 
 # Base classes
-class Briefing:
+class Builder:
+    def __init__(self):
+        logger.info(f"'{self.__class__.__name__}' object instantiated")
+
+
+class Briefing(Builder):
     """
     Handles the rendering and PDF generation of a flight briefing.
 
@@ -393,10 +520,17 @@ class Briefing:
             self.aircraft = briefing_model.aircraft.model_dump()
             self.departure = briefing_model.departure_airfield.model_dump()
             self.arrival = briefing_model.arrival_airfield.model_dump()
+            self.recommendation = briefing_model.recommendation
             self.html: Optional[HTML] = None
-        except AttributeError as err:
-            logger.error(f"Unable to initialize Briefing. Incomplete BriefingModel | Error: {err}")
+            super().__init__()
+        except AttributeError as exp:
+            err = BriefingModelError()
+            logger.error(
+                f"[{err.code}] - Unable to initialize Briefing. Incomplete BriefingModel | Error: {exp}"
+            )
+            raise err from exp
 
+    @add_logger
     def render_briefing_html(self) -> HTML:
         """
         Render the briefing data into HTML using a Jinja2 template.
@@ -405,27 +539,31 @@ class Briefing:
             HTML: A WeasyPrint HTML object containing the rendered briefing.
         """
         template_dir = Path(__file__).parent
+        logger.info(f"Jinja2 template directory set to: {template_dir}")
         environment = Environment(loader=FileSystemLoader(template_dir))
+        logger.info(f"Jinja2 environment set to: {environment}")
 
         try:
             template = environment.get_template("briefing.html")
+        except AttributeError as exp:
+            err = HTMLRenderError()
+            logger.error(
+                f"[{err.code}] - Failed to render briefing HTML | Error: {exp}"
+            )
+            raise err from exp
+        else:
             html_output = template.render(
                 departure=self.departure,
                 arrival=self.arrival,
                 aircraft=self.aircraft,
+                recommendation=self.recommendation,
             )
 
             self.html = HTML(string=html_output)
+            logger.info("Success to render briefing HTML.")
             return self.html
 
-        except AttributeError as err:
-            logger.error(f"Failed to render briefing HTML | Error: {err}")
-            raise RuntimeError("Failed to render briefing HTML. Check data structure.") from err
-
-        except TemplateError as err:
-            logger.error(f"Failed to render briefing HTML | Error: {err}")
-            raise RuntimeError("Failed to render briefing HTML. Check template structure.") from err
-
+    @add_logger
     def write_briefing_pdf(self) -> str:
         """
         Write the rendered HTML briefing to a PDF file.
@@ -437,9 +575,9 @@ class Briefing:
             Path: The file path of the generated PDF.
         """
         if self.html is None:
-            raise ValueError(
-                "HTML content is not rendered. Call render_briefing_html() first."
-            )
+            err = PDFGenerationError()
+            logger.error(f"[{err.code}] - {err.default_message}")
+            raise err
 
         dep_icao = self.departure.get("icaoId", None)
         arr_icao = self.arrival.get("icaoId", None)
@@ -448,6 +586,7 @@ class Briefing:
         output_path = Path.cwd() / output_filename
 
         self.html.write_pdf(str(output_path))
+        logger.info("Success to write briefing into PDF.")
         return str(output_path)
 
 
@@ -468,7 +607,7 @@ class ApiUrlKey(str, Enum):
     AIRCRAFT = "AIRCRAFT_API_URL"
 
 
-class ApiClient:
+class ApiClient(Builder):
     """
     Generic API client for sending GET requests to a specified external API endpoint.
 
@@ -480,6 +619,7 @@ class ApiClient:
     """
 
     def __init__(self, api_url_key: ApiUrlKey) -> None:
+        super().__init__()
         """
         Initializes the API client with a base URL resolved from an environment variable.
 
@@ -489,40 +629,55 @@ class ApiClient:
         self.api_url = os.getenv(api_url_key.value)
 
         if not self.api_url:
-            raise ValueError(f"Environment variable '{api_url_key}' not set or empty.")
+            err = MissingEnvironmentVariableError(
+                f"Environment variable '{self.api_url}' not set or empty."
+            )
+            logger.error(f"[{err.code}] - {err.message}")
+            raise err
 
+    @add_logger
     def load_data(self, params: ApiParams) -> dict:
         """
-        Sends a GET request to the configured API endpoint with optional query parameters.
+        Sends a GET request to the configured API endpoint with query parameters.
 
         Args:
-            **params: Arbitrary keyword arguments passed as query parameters to the API.
+            params (ApiParams): Parameters to be sent as query params in the API request.
 
         Returns:
-            Response: A `requests.Response` object containing the server's response.
+            dict: Parsed JSON response from the server, or an empty dict if status code is not 200.
 
         Raises:
-            requests.RequestException: If the HTTP request fails.
+            ApiRequestError: If the HTTP request fails.
         """
         try:
             response = requests.get(url=self.api_url, params=params.model_dump())
-            return response.json() if response.status_code == 200 else {}
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.warning(
+                    f"Non 200 response: [{response.status_code}] - {response.text}"
+                )
+                return {}
         except requests.RequestException as exp:
-            raise exp
+            err = ApiRequestError(f"{exp}")
+            logger.error(f"[{err.code}] - {err.default_message}")
+            raise err from exp
 
 
-class AirfieldModelBuilder:
+class AirfieldModelBuilder(Builder):
     """
     A builder class for constructing `AirfieldModel` instances by aggregating data
     from multiple API sources, such as airfield and weather data.
     """
 
     def __init__(self) -> None:
+        super().__init__()
         """
         Initializes the builder with an empty airfield records dictionary.
         """
         self.airfield_records = {}
 
+    @add_logger
     def add_airfield_data(
         self, airfield_api: ApiClient, params: AirfieldParams
     ) -> Self:
@@ -545,6 +700,7 @@ class AirfieldModelBuilder:
         )
         return self
 
+    @add_logger
     def add_weather_data(self, weather_api: ApiClient, params: AirfieldParams) -> Self:
         """
         Loads weather data from the provided API and updates internal records.
@@ -565,42 +721,56 @@ class AirfieldModelBuilder:
         )
         return self
 
-    def build(self) -> AirfieldModel | None:
+    @add_logger
+    def build(self) -> AirfieldModel:
         """
-        Builds and returns a list containing a single `AirfieldModel` instance
-        using the accumulated data.
+        Constructs and returns an `AirfieldModel` instance using the accumulated
+        airfield data.
+
+        This method extracts relevant information such as runways, frequencies,
+        elevation, weather conditions (wind, temperature), and METAR/TAF data
+        from the stored `airfield_records` and compiles them into a structured
+        `AirfieldModel`.
 
         Returns:
-            AirfieldModel | None: An AirfieldModel instance, or None if data is insufficient.
+            AirfieldModel: A fully populated `AirfieldModel` instance representing
+            the airfield and its current operational and meteorological data.
+
+        Raises:
+            AirfieldModelBuildError: If required data such as the `icaoId` is missing
+            from the airfield records, indicating that the airfield could not be found
+            or the data is incomplete.
         """
         if not self.airfield_records.get("icaoId"):
-            return None
-        else:
-            runways = self.airfield_records.get("runways", [])
-            frequencies = self.airfield_records.get("freqs")
-            parsed_frequencies = self._extract_frequencies(frequencies)
+            err = AirfieldModelBuildError()
+            logger.error(f"[{err.code}] - {err.default_message}")
+            raise err
 
-            return AirfieldModel(
-                icaoId=self.airfield_records.get("icaoId", None),
-                runway=[
-                    RunwayModel(
-                        direction=runway.get("id", None),
-                        length=runway.get("dimension", None).split("x")[0],
-                        width=runway.get("dimension", None).split("x")[1],
-                        surface=runway.get("surface", None),
-                    ).model_dump()
-                    for runway in runways
-                ],
-                elevation=self.airfield_records.get("elev", None),
-                wind=WindModel(
-                    direction=self.airfield_records.get("wdir", None),
-                    speed=self.airfield_records.get("wspd", None),
-                ),
-                temperature=self.airfield_records.get("temp", None),
-                frequency=parsed_frequencies,
-                metar=self.airfield_records.get("rawOb", None),
-                taf=self.airfield_records.get("rawTaf", None),
-            )
+        runways = self.airfield_records.get("runways", [])
+        frequencies = self.airfield_records.get("freqs")
+        parsed_frequencies = self._extract_frequencies(frequencies)
+
+        return AirfieldModel(
+            icaoId=self.airfield_records.get("icaoId", None),
+            runway=[
+                RunwayModel(
+                    direction=runway.get("id", None),
+                    length=runway.get("dimension", None).split("x")[0],
+                    width=runway.get("dimension", None).split("x")[1],
+                    surface=runway.get("surface", None),
+                ).model_dump()
+                for runway in runways
+            ],
+            elevation=self.airfield_records.get("elev", None),
+            wind=WindModel(
+                direction=self.airfield_records.get("wdir", None),
+                speed=self.airfield_records.get("wspd", None),
+            ),
+            temperature=self.airfield_records.get("temp", None),
+            frequency=parsed_frequencies,
+            metar=self.airfield_records.get("rawOb", None),
+            taf=self.airfield_records.get("rawTaf", None),
+        )
 
     @staticmethod
     def _extract_runways(runways_input: list) -> list[RunwayModel]:
@@ -649,7 +819,7 @@ class AirfieldModelBuilder:
             return {}
 
 
-class BriefingGenerator:
+class BriefingGenerator(Builder):
     """
     A class responsible for generating a flight briefing using airfield and weather data.
 
@@ -660,6 +830,7 @@ class BriefingGenerator:
     def __init__(
         self, data: InputData, airfield_api: ApiClient, weather_api: ApiClient
     ) -> None:
+        super().__init__()
         """
         Initialize the BriefingGenerator instance with input data and API clients.
 
@@ -674,6 +845,7 @@ class BriefingGenerator:
         self.departure_params = AirfieldParams(ids=self.data.departure_airfield)
         self.arrival_params = AirfieldParams(ids=self.data.arrival_airfield)
 
+    @add_logger
     def generate_briefing(self) -> BriefingModel:
         """
         Generate the full flight briefing model.
@@ -704,10 +876,10 @@ class BriefingGenerator:
             aircraft=self.data.aircraft_data,
             departure_airfield=departure_airfield_model_builder.build(),
             arrival_airfield=arrival_airfield_model_builder.build(),
-            recommendation="NO GO",
         )
 
 
+@add_logger
 def create_airfield_model(
     airfield_api: ApiClient, weather_api: ApiClient, airfield_api_params: AirfieldParams
 ) -> AirfieldModel:
@@ -735,6 +907,7 @@ def create_airfield_model(
     return airfield_model
 
 
+@add_logger
 def create_briefing(briefing_model: BriefingModel) -> Briefing:
     """
     Generate an HTML representation of the flight briefing from the briefing model.
@@ -767,7 +940,7 @@ def root() -> dict:
     Returns:
         dict: A simple message indicating that the API is running.
     """
-    logger.info("Root endpoint accessed: Briefing API is running")
+    logger.info("Root endpoint accessed: Briefing API is running.")
     return {"message": "Briefing API is running."}
 
 
@@ -784,7 +957,7 @@ def ping_api() -> dict:
     Returns:
         dict: A status message indicating the API is healthy.
     """
-    logger.info("Health check ping received: API is responsive")
+    logger.info("Health check ping received: API is responsive.")
     return {"status": "healthy"}
 
 
@@ -817,12 +990,19 @@ def generate_briefing(data: InputData) -> BriefingModel:
         ).generate_briefing()
 
     except HTTPException as exp:
-        logger.warning(f"Briefing generation failed due to HTTP error | Details: {exp}")
-        raise RuntimeError("Unable to generate briefing")
+        err = BriefingError()
+        logger.error(
+            f"[{err.code}] - Briefing generation failed due to HTTP error | Details: {exp}"
+        )
+        raise err from exp
 
     except Exception as exp:
-        logger.error(msg=f"Unexpected error during briefing generation | Error: {exp}", exc_info=True)
-        raise RuntimeError("Unexpected error during briefing generation")
+        err = BriefingModelError()
+        logger.error(
+            msg=f"[{err.code}] - Unexpected error during briefing generation | Error: {exp}",
+            exc_info=True,
+        )
+        raise err from exp
 
     else:
         briefing_id = str(briefing.briefing_id)
@@ -860,32 +1040,35 @@ def download_briefing(request: Request, briefing_id: str) -> FileResponse:
     # Dummy request
     _ = request.client.host
 
-    try:
-        briefing_model = briefing_store.get(briefing_id)
-    except KeyError as err:
-        logger.error(f"Failed to retrieve briefing model | ID: {briefing_id} | Error: {err}")
-        raise RuntimeError(f"Invalid key. Unable to fetch the briefing model | Error: {err}")
-    else:
-        # Update and log status: PENDING
-        briefing_status.update({briefing_id: BriefingStatus.PENDING})
-        logger.info(f"Briefing download requested | ID: {briefing_id} | Status: PENDING")
+    briefing_model = briefing_store.get(briefing_id)
 
-        time.sleep(10)
+    if briefing_model is None:
+        err = BriefingNotFoundError()
+        logger.error(
+            f"[{err.code}] - Failed to retrieve briefing model | ID: {briefing_id}"
+        )
+        raise err
 
-        # Update and log status: IN_PROGRESS
-        briefing_status.update({briefing_id: BriefingStatus.IN_PROGRESS})
-        logger.info(f"Briefing rendering started | ID: {briefing_id} | Status: IN_PROGRESS")
+    # Update and log status: PENDING
+    briefing_status.update({briefing_id: BriefingStatus.PENDING})
+    logger.info(f"Briefing download requested | ID: {briefing_id} | Status: PENDING")
 
-        briefing = Briefing(briefing_model)
-        briefing.render_briefing_html()
+    time.sleep(10)
 
-        time.sleep(10)
+    # Update and log status: IN_PROGRESS
+    briefing_status.update({briefing_id: BriefingStatus.IN_PROGRESS})
+    logger.info(f"Briefing rendering started | ID: {briefing_id} | Status: IN_PROGRESS")
 
-        # Update and log status: COMPLETE
-        briefing_status.update({briefing_id: BriefingStatus.COMPLETE})
-        logger.info(f"Briefing generation complete | ID: {briefing_id} | Status: COMPLETE")
+    briefing = Briefing(briefing_model)
+    briefing.render_briefing_html()
 
-        return FileResponse(briefing.write_briefing_pdf())
+    time.sleep(10)
+
+    # Update and log status: COMPLETE
+    briefing_status.update({briefing_id: BriefingStatus.COMPLETE})
+    logger.info(f"Briefing generation complete | ID: {briefing_id} | Status: COMPLETE")
+
+    return FileResponse(briefing.write_briefing_pdf())
 
 
 @app.get(
@@ -905,17 +1088,20 @@ def check_status(briefing_id: str) -> dict:
     Returns:
         dict: A dictionary containing the briefing ID and its current status.
     """
-    try:
-        status = briefing_status.get(briefing_id)
-    except KeyError as err:
-        logger.error(f"Failed to retrieve status for briefing ID '{briefing_id}': {err}")
-        raise RuntimeError(f"Invalid key. Unable to fetch the briefing status | Error: {err}")
-    else:
-        logger.info(
-            f"Briefing status retrieved | ID: {briefing_id} | Current Status: {status}"
-        )
+    status = briefing_status.get(briefing_id)
 
-        return {briefing_id: status}
+    if status is None:
+        err = BriefingStatusError(
+            f"Failed to retrieve status for briefing ID '{briefing_id}'"
+        )
+        logger.error(f"[{err.code}] - {err.message}")
+        raise err
+
+    logger.info(
+        f"Briefing status retrieved | ID: {briefing_id} | Current Status: {status}"
+    )
+
+    return {briefing_id: status}
 
 
 if __name__ == "__main__":
