@@ -205,6 +205,7 @@ class BriefingModel(BaseModel):
         description="Data about the arrival airfield including weather."
     )
     recommendation: Literal["NO GO", "GO IFR", "GO VFR"] = Field(
+        default="NO GO",
         description="Flight recommendation based on the briefing."
     )
 
@@ -411,6 +412,7 @@ class Briefing:
             self.aircraft = briefing_model.aircraft.model_dump()
             self.departure = briefing_model.departure_airfield.model_dump()
             self.arrival = briefing_model.arrival_airfield.model_dump()
+            self.recommendation = briefing_model.recommendation
             self.html: Optional[HTML] = None
         except AttributeError as err:
             logger.error(f"Unable to initialize Briefing. Incomplete BriefingModel | Error: {err}")
@@ -431,6 +433,7 @@ class Briefing:
                 departure=self.departure,
                 arrival=self.arrival,
                 aircraft=self.aircraft,
+                recommendation=self.recommendation,
             )
 
             self.html = HTML(string=html_output)
@@ -728,7 +731,6 @@ class BriefingGenerator:
             aircraft=self.data.aircraft_data,
             departure_airfield=departure_airfield_model_builder.build(),
             arrival_airfield=arrival_airfield_model_builder.build(),
-            recommendation="NO GO",
         )
 
 
