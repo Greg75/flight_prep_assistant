@@ -123,6 +123,7 @@ celerybeat.pid
 # Environments
 flight_prep_assistant/.env
 .venv
+.venv/
 env/
 venv/
 ENV/
