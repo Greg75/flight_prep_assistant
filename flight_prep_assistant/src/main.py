@@ -11,10 +11,12 @@ from typing import Dict, List, Literal, Optional, Self
 from uuid import UUID, uuid4
 
 import requests
+import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from jinja2 import Environment, FileSystemLoader, TemplateError
+from math import sin
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 from weasyprint import HTML
@@ -270,6 +272,11 @@ class InputData(BaseModel):
     }
 
 
+class OpsCalculatorInputData(BaseModel):
+    aircraft_data: AircraftModel = Field(description="")
+    airfield_data: AirfieldModel = Field(description="")
+
+
 class ApiParams(BaseModel):
     """
     The base parameter for API request.
@@ -343,7 +350,47 @@ def get_time(func):
     return inner
 
 
+def is_within_limits():
+    pass
+
+
 # Base classes
+class AircraftOpsCalculator:
+    def __init__(self, aircraft_data: AircraftModel, airfield_data: AirfieldModel) -> None:
+        self.aircraft_data = aircraft_data.model_dump()
+        self.airfield_data = airfield_data.model_dump()
+        self.wind = self.airfield_data.get("wind")
+
+    def get_wind_data(self) -> tuple:
+        wind_speed = self.wind.get("speed")
+        wind_direction = self.wind.get("direction")
+
+        return wind_speed, wind_direction
+
+    def calculate_xwind_speed(self) -> list[int]:
+        # wind_speed, wind_direction = self.get_wind_data()
+        # all_airfield_runways = int(self.airfield_data.get("runway")[0].get("direction").split('/')[0])
+        # for bidirectional_runways in all_airfield_runways:
+        #     runways = bidirectional_runways.get("direction")
+        #     for runway in runways:
+        #         runway.split()
+        #
+        # xwind_speed = round(wind_speed * sin(wind_direction - runway_in_use), 1)
+        pass
+
+    def calculate_xwind_direction(self):
+        pass
+
+    def calculate_takeoff_distance(self):
+        pass
+
+    def calculate_landing_distance(self):
+        pass
+
+    def calculate_density_altitude(self):
+        pass
+
+
 class Briefing:
     """
     Handles the rendering and PDF generation of a flight briefing.
@@ -671,6 +718,12 @@ class BriefingGenerator:
             weather_api=self.weather_api, params=self.arrival_params
         )
 
+        ops_calculator = AircraftOpsCalculator(
+            aircraft_data=self.data.aircraft_data,
+            airfield_data=departure_airfield_model_builder.build())
+        logger.info(f"Wind parameters: {ops_calculator.get_wind_data()}")
+        logger.info(f"Xwind speed: {ops_calculator.calculate_xwind_speed()}")
+
         return BriefingModel(
             aircraft=self.data.aircraft_data,
             departure_airfield=departure_airfield_model_builder.build(),
@@ -890,4 +943,4 @@ def check_status(briefing_id: str) -> dict:
 
 
 if __name__ == "__main__":
-    pass
+    uvicorn.run(app="main:app", host="127.0.0.1", port=8000)
