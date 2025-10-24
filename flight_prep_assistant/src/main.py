@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from jinja2 import Environment, FileSystemLoader, TemplateError
-from math import sin
+from math import sin, radians
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 from weasyprint import HTML
@@ -363,7 +363,7 @@ def convert_to_int(runways_direction: list) -> set[int]:
     leading zeros).
 
     Example:
-        >>> convert_to_int(["07R", "25L/07R", "18"])
+        convert_to_int(["07R", "25L/07R", "18"])
         {7, 25, 18}
 
     Args:
@@ -409,7 +409,10 @@ class AircraftOpsCalculator:
     def get_runways_direction(self) -> list[str]:
         runways = self.airfield_data.get("runway")
         try:
-            runways_direction = [runway.get("direction") for runway in runways]
+            runways_direction = [direction
+                                 for runway in runways
+                                 for direction in runway.get("direction", "").split('/')
+                                 ]
             logger.info(f"Runways extracted from OpsCalculator: {runways_direction}")
 
             return runways_direction
@@ -418,10 +421,18 @@ class AircraftOpsCalculator:
             logger.error(f"Failed to get runways directions | Error: {err}.")
             raise RuntimeError(f"Failed to get runways directions. Check runways data format.") from err
 
-    def calculate_xwind_speed(self):
-        pass
+    def calculate_xwind_speed(self) -> list[float]:
+        wind_speed, wind_direction = self.get_wind_data()
+        runways_directions = convert_to_int(self.get_runways_direction())
 
-    def calculate_xwind_direction(self):
+        xwinds_speed = [
+            round(wind_speed * (sin(radians(wind_direction - runway_direction * 10))), 1)
+            for runway_direction in runways_directions
+        ]
+
+        return xwinds_speed
+
+    def calculate_headwind_speed(self):
         pass
 
     def calculate_takeoff_distance(self):
@@ -766,14 +777,12 @@ class BriefingGenerator:
         departure_airfield_ops_calculator = AircraftOpsCalculator(
             aircraft_data=self.data.aircraft_data,
             airfield_data=departure_airfield_model_builder.build())
-        convert_to_int(departure_airfield_ops_calculator.get_runways_direction())
         logger.info(f"Departure airfield wind parameters: {departure_airfield_ops_calculator.get_wind_data()}")
         logger.info(f"Departure airfield crosswind speed: {departure_airfield_ops_calculator.calculate_xwind_speed()}")
 
         arrival_airfield_ops_calculator = AircraftOpsCalculator(
             aircraft_data=self.data.aircraft_data,
             airfield_data=arrival_airfield_model_builder.build())
-        convert_to_int(arrival_airfield_ops_calculator.get_runways_direction())
         logger.info(f"Arrival airfield wind parameters: {arrival_airfield_ops_calculator.get_wind_data()}")
         logger.info(f"Arrival airfield crosswind speed: {arrival_airfield_ops_calculator.calculate_xwind_speed()}")
 
@@ -824,7 +833,7 @@ def create_briefing(briefing_model: BriefingModel) -> Briefing:
     return Briefing(briefing_model=briefing_model)
 
 
-app = FastAPI(debug=True)
+app = FastAPI(debug=True, swagger_ui_parameters={"theme": "dark"})
 
 briefing_store: Dict[str, BriefingModel] = {}
 briefing_status: Dict[str, BriefingStatus] = {}
