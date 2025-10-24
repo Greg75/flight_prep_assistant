@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -351,6 +352,43 @@ def get_time(func):
     return inner
 
 
+def convert_to_int(runways_direction: list) -> set[int]:
+    """
+    Convert a list of runway direction strings into a set of integers.
+
+    Each item in the input list is expected to contain a runway direction
+    string (e.g., "07R", "25L/07R", or "18"), possibly including letters or
+    slashes. The function extracts the first numeric portion of each
+    direction and converts it into an integer (automatically removing
+    leading zeros).
+
+    Example:
+        >>> convert_to_int(["07R", "25L/07R", "18"])
+        {7, 25, 18}
+
+    Args:
+        runways_direction (list): A list of runway direction strings.
+
+    Returns:
+        set[int]: A set of unique integers representing runway directions.
+
+    Logs:
+        Info-level log containing the resulting set of converted integers.
+    """
+    runways_direction_converted_to_int = {
+        int(re.findall(
+            pattern=r"\d+",
+            string=runway_direction.split('/')[0]
+        )[0]) for runway_direction in runways_direction
+    }
+    logger.info(
+        f"Runways extracted from OpsCalculator, converted to integers: "
+        f"{runways_direction_converted_to_int}"
+    )
+
+    return runways_direction_converted_to_int
+
+
 def is_within_limits():
     pass
 
@@ -368,15 +406,19 @@ class AircraftOpsCalculator:
 
         return wind_speed, wind_direction
 
-    def calculate_xwind_speed(self) -> list[int]:
-        # wind_speed, wind_direction = self.get_wind_data()
-        # all_airfield_runways = int(self.airfield_data.get("runway")[0].get("direction").split('/')[0])
-        # for bidirectional_runways in all_airfield_runways:
-        #     runways = bidirectional_runways.get("direction")
-        #     for runway in runways:
-        #         runway.split()
-        #
-        # xwind_speed = round(wind_speed * sin(wind_direction - runway_in_use), 1)
+    def get_runways_direction(self) -> list[str]:
+        runways = self.airfield_data.get("runway")
+        try:
+            runways_direction = [runway.get("direction") for runway in runways]
+            logger.info(f"Runways extracted from OpsCalculator: {runways_direction}")
+
+            return runways_direction
+
+        except KeyError as err:
+            logger.error(f"Failed to get runways directions | Error: {err}.")
+            raise RuntimeError(f"Failed to get runways directions. Check runways data format.") from err
+
+    def calculate_xwind_speed(self):
         pass
 
     def calculate_xwind_direction(self):
@@ -721,11 +763,19 @@ class BriefingGenerator:
             weather_api=self.weather_api, params=self.arrival_params
         )
 
-        ops_calculator = AircraftOpsCalculator(
+        departure_airfield_ops_calculator = AircraftOpsCalculator(
             aircraft_data=self.data.aircraft_data,
             airfield_data=departure_airfield_model_builder.build())
-        logger.info(f"Wind parameters: {ops_calculator.get_wind_data()}")
-        logger.info(f"Xwind speed: {ops_calculator.calculate_xwind_speed()}")
+        convert_to_int(departure_airfield_ops_calculator.get_runways_direction())
+        logger.info(f"Departure airfield wind parameters: {departure_airfield_ops_calculator.get_wind_data()}")
+        logger.info(f"Departure airfield crosswind speed: {departure_airfield_ops_calculator.calculate_xwind_speed()}")
+
+        arrival_airfield_ops_calculator = AircraftOpsCalculator(
+            aircraft_data=self.data.aircraft_data,
+            airfield_data=arrival_airfield_model_builder.build())
+        convert_to_int(arrival_airfield_ops_calculator.get_runways_direction())
+        logger.info(f"Arrival airfield wind parameters: {arrival_airfield_ops_calculator.get_wind_data()}")
+        logger.info(f"Arrival airfield crosswind speed: {arrival_airfield_ops_calculator.calculate_xwind_speed()}")
 
         return BriefingModel(
             aircraft=self.data.aircraft_data,
