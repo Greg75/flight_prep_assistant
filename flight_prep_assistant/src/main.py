@@ -8,7 +8,7 @@ from enum import Enum, IntEnum
 from functools import wraps
 from http.client import HTTPException
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Self
+from typing import Literal, Optional, Self, Any
 from uuid import UUID, uuid4
 
 import requests
@@ -17,41 +17,45 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from jinja2 import Environment, FileSystemLoader, TemplateError
-from math import sin, radians
+from math import sin, cos, radians, exp, sqrt
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 from weasyprint import HTML
 
+from flight_prep_assistant.src.constants import (GRAVITY_FACTOR,
+                                                 KNOTS_FACTOR, HEIGHT_APPROXIMATION, CALIBRATED_TAKEOFF_FACTOR,
+                                                 CALIBRATED_LANDING_FACTOR)
+
 load_dotenv()
 
-# Creating a logger
+# --- Creating a logger ---
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-# Creating a console and file handlers
+# --- Creating a console and file handlers ---
 console_handler = logging.StreamHandler(stream=sys.stdout)
 file_handler = logging.FileHandler(filename="flight_prep_assistant.log", encoding="utf-8")
 
-# Setting logging levels
+# --- Setting logging levels ---
 console_handler.setLevel(logging.INFO)
 file_handler.setLevel(logging.ERROR)
 
-# Define a formatter
+# --- Define a formatter ---
 formatter = logging.Formatter(
     fmt="%(levelname)s: %(name)s - %(asctime)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 
-# Apply formatter to both console and file handlers
+# --- Apply formatter to both console and file handlers ---
 console_handler.setFormatter(formatter)
 file_handler.setFormatter(formatter)
 
-# Add handlers to the logger
+# --- Add handlers to the logger ---
 logger.addHandler(console_handler)
 logger.addHandler(file_handler)
 
 
-# Models classes
+# --- Models classes ---
 class RunwayModel(BaseModel):
     """
     Represents a runway at an airfield.
@@ -130,7 +134,7 @@ class AirfieldModel(BaseModel):
     icaoId: Optional[str] = Field(
         default=None, description="The ICAO identifier of the airfield."
     )
-    runway: List[RunwayModel] = Field(description="A list of runways at the airfield.")
+    runway: list[RunwayModel] = Field(description="A list of runways at the airfield.")
     elevation: Optional[int] = Field(
         default=None, description="Elevation of the airfield above the sea level."
     )
@@ -263,9 +267,9 @@ class InputData(BaseModel):
                     "aircraft_data": {
                         "type": "3XTrim",
                         "mtow": 495,
-                        "takeoff_distance_at_sea_level": 450,
-                        "landing_distance_at_sea_level": 250,
-                        "stall_speed": 65,
+                        "takeoff_distance_at_sea_level": 918,
+                        "landing_distance_at_sea_level": 918,
+                        "stall_speed": 38,
                         "xwind_max_speed": 12,
                     },
                 }
@@ -320,7 +324,7 @@ class AircraftParams(ApiParams):
     manufacturer: str = Field(description="The name of the aircraft manufacturer.")
 
 
-# Helper functions
+# --- Helper functions ---
 def get_time(func):
     """
     Decorator that measures and logs the execution time of the decorated function.
@@ -352,97 +356,277 @@ def get_time(func):
     return inner
 
 
-def convert_to_int(runways_direction: list) -> set[int]:
+def convert_to_int(runways_direction: list[str]) -> set[int]:
     """
     Convert a list of runway direction strings into a set of integers.
+    Handles letters, slashes, empty items, and logs the result.
+    """
+    converted = set()
+    for rwy in runways_direction:
+        try:
+            nums = re.findall(
+                pattern=r"\d+",
+                string=rwy)
+            if nums:
+                converted.add(int(nums[0]))
+        except Exception as e:
+            logger.warning(f"Skipping invalid runway entry '{rwy}': {e}")
 
-    Each item in the input list is expected to contain a runway direction
-    string (e.g., "07R", "25L/07R", or "18"), possibly including letters or
-    slashes. The function extracts the first numeric portion of each
-    direction and converts it into an integer (automatically removing
-    leading zeros).
+    logger.info(f"Runways extracted, converted to integers: {converted}")
+    return converted
 
-    Example:
-        convert_to_int(["07R", "25L/07R", "18"])
-        {7, 25, 18}
+
+def convert_to_tas(ias: float, density_ratio: float) -> int:
+    """
+    Convert indicated airspeed (IAS) to true airspeed (TAS) given the air density.
+
+    True airspeed increases as air density decreases. This function uses the
+    standard relation between IAS and TAS:
+
+        TAS = IAS / sqrt(density_ratio)
+
+    where 'density_ratio' is the ratio of air density at the current altitude
+    to the standard sea-level air density (σ = ρ / ρ0).
 
     Args:
-        runways_direction (list): A list of runway direction strings.
+        ias (float): Indicated airspeed in knots.
+        density_ratio (float): Air density ratio (0 < σ ≤ 1).
 
     Returns:
-        set[int]: A set of unique integers representing runway directions.
-
-    Logs:
-        Info-level log containing the resulting set of converted integers.
+        int: True airspeed in knots, rounded to the nearest integer.
     """
-    runways_direction_converted_to_int = {
-        int(re.findall(
-            pattern=r"\d+",
-            string=runway_direction.split('/')[0]
-        )[0]) for runway_direction in runways_direction
-    }
-    logger.info(
-        f"Runways extracted from OpsCalculator, converted to integers: "
-        f"{runways_direction_converted_to_int}"
-    )
-
-    return runways_direction_converted_to_int
+    return round(ias / sqrt(density_ratio))
 
 
 def is_within_limits():
     pass
 
 
-# Base classes
+# --- Base classes ---
 class AircraftOpsCalculator:
+    """
+    A calculator for determining aircraft operational parameters related to wind and runway orientation.
+
+    This class processes aircraft and airfield data to compute crosswind and headwind components
+    for all available runways at a given airfield.
+
+    Attributes:
+        aircraft_data (dict): Serialized data of the aircraft model.
+        airfield_data (dict): Serialized data of the airfield model.
+        wind (dict): Dictionary containing wind parameters such as speed and direction.
+        wind_speed (float): Wind speed value extracted from airfield data.
+        wind_direction (float): Wind direction in degrees, extracted from airfield data.
+        runways_direction (list[int]): List of runway directions converted to integers.
+    """
+
     def __init__(self, aircraft_data: AircraftModel, airfield_data: AirfieldModel) -> None:
+        """
+        Initialize the AircraftOpsCalculator with aircraft and airfield data.
+
+        Args:
+            aircraft_data (AircraftModel): Aircraft model object containing aircraft details.
+            airfield_data (AirfieldModel): Airfield model object containing runway and wind data.
+
+        Raises:
+            AttributeError: If the provided models are missing expected attributes.
+        """
+        # --- Verify model like inputs ---
+        if not hasattr(aircraft_data, "model_dump") or not hasattr(airfield_data, "model_dump"):
+            raise RuntimeError("Expected Pydantic models with .model_dump() method.")
+
+        # --- Dump dicts ---
         self.aircraft_data = aircraft_data.model_dump()
         self.airfield_data = airfield_data.model_dump()
-        self.wind = self.airfield_data.get("wind")
 
-    def get_wind_data(self) -> tuple:
-        wind_speed = self.wind.get("speed")
-        wind_direction = self.wind.get("direction")
+        # --- Aircraft data ---
+        self.takeoff_distance_at_sea_level: int = int(self.aircraft_data.get("takeoff_distance_at_sea_level", 0))
+        self.landing_distance_at_sea_level: int = int(self.aircraft_data.get("landing_distance_at_sea_level", 0))
+        self.xwind_max_speed: float = float(self.aircraft_data.get("xwind_max_speed", 0.0))
+        self.stall_speed: int = int(self.aircraft_data.get("stall_speed", 0))
 
-        return wind_speed, wind_direction
+        # --- Airfield data ---
+        self.wind: dict[str, Any] = self.airfield_data.get("wind", {})
+
+        # --- Handle and normalize wind speed
+        try:
+            self.wind_speed: float = self.wind.get("speed", 0.0) or 0.0
+        except (TypeError, ValueError):
+            self.wind_speed = 0.0
+
+        raw_dir = self.wind.get("direction", 0.0) or 0.0
+        if isinstance(raw_dir, str):
+            if raw_dir.strip().upper() in {"VRB", "CALM", "VAR", ""}:
+                self.wind_direction = 0.0
+            else:
+                try:
+                    self.wind_direction = float(raw_dir)
+                except ValueError:
+                    self.wind_direction = 0.0
+        else:
+            self.wind_direction = 0.0
+
+        # --- Normalize wind direction
+        self.wind_direction %= 360
+
+        # --- Parse runways direction ---
+        self.runways_direction: set[int] = convert_to_int(self.get_runways_direction())
 
     def get_runways_direction(self) -> list[str]:
-        runways = self.airfield_data.get("runway")
+        """
+        Retrieve and parse runway direction data from the airfield information.
+
+        Returns:
+            list[str]: A list of runway direction identifiers (e.g., ['09', '27']).
+
+        Raises:
+            RuntimeError: If runway direction data cannot be retrieved or parsed correctly.
+        """
+        runways = self.airfield_data.get("runway", [])
         try:
             runways_direction = [direction
                                  for runway in runways
                                  for direction in runway.get("direction", "").split('/')
                                  ]
-            logger.info(f"Runways extracted from OpsCalculator: {runways_direction}")
 
             return runways_direction
 
         except KeyError as err:
             logger.error(f"Failed to get runways directions | Error: {err}.")
-            raise RuntimeError(f"Failed to get runways directions. Check runways data format.") from err
+            raise RuntimeError("Failed to get runways directions. Check runways data format.") from err
 
     def calculate_xwind_speed(self) -> list[float]:
-        wind_speed, wind_direction = self.get_wind_data()
-        runways_directions = convert_to_int(self.get_runways_direction())
+        """
+        Calculate the crosswind (perpendicular) component of the wind for each runway.
 
-        xwinds_speed = [
-            round(wind_speed * (sin(radians(wind_direction - runway_direction * 10))), 1)
+        The crosswind is computed as:
+            crosswind = wind_speed * sin(wind_direction - runway_direction * 10)
+
+        Returns:
+            list[float]: List of crosswind speeds (in the same units as the input wind speed)
+                         for each runway direction, rounded to one decimal place.
+        """
+        runways_directions = self.runways_direction
+
+        # --- Calculations ---
+        xwind_speeds = [
+            round(self.wind_speed * (sin(radians(self.wind_direction - runway_direction * 10))), 1)
             for runway_direction in runways_directions
         ]
 
-        return xwinds_speed
+        return xwind_speeds
 
-    def calculate_headwind_speed(self):
-        pass
+    def calculate_headwind_speed(self) -> list[float]:
+        """
+        Calculate the headwind (parallel) component of the wind for each runway.
 
-    def calculate_takeoff_distance(self):
-        pass
+        The headwind is computed as:
+            headwind = wind_speed * cos(wind_direction - runway_direction * 10)
 
-    def calculate_landing_distance(self):
-        pass
+        Returns:
+            list[float]: List of headwind speeds (in the same units as the input wind speed)
+                         for each runway direction, rounded to one decimal place.
+        """
+        runways_directions = self.runways_direction
 
-    def calculate_density_altitude(self):
-        pass
+        # --- Calculations ---
+        headwinds_speed = [
+            round(self.wind_speed * (cos(radians(self.wind_direction - runway_direction * 10))), 1)
+            for runway_direction in runways_directions
+        ]
+
+        return headwinds_speed
+
+    def calculate_density_altitude(self) -> int:
+        """
+        Calculate density altitude based on the provided METAR data.
+        Falls back to standard pressure altitude if METAR is missing.
+        """
+        metar = self.airfield_data.get("metar", None)
+
+        try:
+            # --- Handle missing METAR ---
+            if not metar or not isinstance(metar, str):
+                logger.warning("No valid METAR data available — using default sea level density altitude (0 ft).")
+                return 0  # fallback to standard conditions
+
+            # --- Normal parsing logic ---
+            pressure = None
+            temperature = None
+
+            for token in metar.split():
+                # Parse pressure (e.g. Q1013 or A2992)
+                if token.startswith("Q") and token[1:].isdigit():
+                    pressure = int(token[1:])
+                elif token.startswith("A") and token[1:].isdigit():
+                    # Inches of Hg to hPa
+                    pressure = round(float(token[1:]) * 33.8639)
+
+                # Parse temperature (e.g. 15/10)
+                if "/" in token and token.replace("/", "").replace("M", "").isdigit():
+                    parts = token.split("/")
+                    try:
+                        temperature = int(parts[0].replace("M", "-"))
+                    except ValueError:
+                        continue
+
+            if pressure is None or temperature is None:
+                logger.warning(f"Incomplete METAR data for density altitude. Pressure={pressure}, Temp={temperature}")
+                return 0
+
+            # --- Compute pressure altitude ---
+            field_elevation = getattr(self, "elevation", 0)
+            pressure_altitude = field_elevation + (1013 - pressure) * 27
+
+            # --- Compute density altitude ---
+            isa_temp = 15 - 0.00198 * field_elevation
+            density_altitude = round(pressure_altitude + (120 * (temperature - isa_temp)))
+
+            logger.info(f"Density altitude: {density_altitude} ft")
+            return density_altitude
+
+        except Exception as err:
+            logger.error(f"Failed to calculate density altitude | Error: {err}")
+            raise RuntimeError("Error calculating density altitude.") from err
+
+    def calculate_takeoff_distance(self) -> list[int]:
+        wind_speeds = self.calculate_headwind_speed()
+        density_altitude = self.calculate_density_altitude()
+        density_ratio = exp(- density_altitude/HEIGHT_APPROXIMATION)
+        takeoff_speed = self.stall_speed * 1.2
+        true_airspeed = convert_to_tas(takeoff_speed, density_ratio)
+        ground_speeds = [(true_airspeed - wind_speed) * KNOTS_FACTOR for wind_speed in wind_speeds]
+        surface_factor = 0.02
+        safety_factor = 1.43
+        takeoff_distance = [
+            round((ground_speed ** 2) /
+                  (2 * GRAVITY_FACTOR * (CALIBRATED_TAKEOFF_FACTOR * density_ratio - surface_factor))
+                  * safety_factor)
+            for ground_speed in ground_speeds
+        ]
+        logger.info(f"Required takeoff distance: {takeoff_distance}")
+
+        return takeoff_distance
+
+    def calculate_landing_distance(self) -> list[int]:
+        wind_speeds = self.calculate_headwind_speed()
+        density_altitude = self.calculate_density_altitude()
+        density_ratio = exp(- density_altitude / HEIGHT_APPROXIMATION)
+        landing_speed = self.stall_speed * 1.3
+        true_airspeed = convert_to_tas(landing_speed, density_ratio)
+        ground_speeds = [(true_airspeed - wind_speed) * KNOTS_FACTOR for wind_speed in wind_speeds]
+        surface_factor = 1.0
+        safety_factor = 1.43
+        landing_distance = [
+            round(
+                ((ground_speed ** 2) /
+                 (2 * GRAVITY_FACTOR * (surface_factor + CALIBRATED_LANDING_FACTOR * density_ratio)))
+                * safety_factor
+            )
+            for ground_speed in ground_speeds
+        ]
+        logger.info(f"Required landing distance: {landing_distance}")
+
+        return landing_distance
 
 
 class Briefing:
@@ -581,8 +765,8 @@ class ApiClient:
         try:
             response = requests.get(url=self.api_url, params=params.model_dump())
             return response.json() if response.status_code == 200 else {}
-        except requests.RequestException as exp:
-            raise exp
+        except requests.RequestException as exc:
+            raise exc
 
 
 class AirfieldModelBuilder:
@@ -661,7 +845,7 @@ class AirfieldModelBuilder:
                         direction=runway.get("id", None),
                         length=runway.get("dimension", None).split("x")[0],
                         width=runway.get("dimension", None).split("x")[1],
-                        surface=runway.get("surface", None),
+                        surface=runway.get("surface", None)[0],
                     ).model_dump()
                     for runway in runways
                 ],
@@ -777,14 +961,24 @@ class BriefingGenerator:
         departure_airfield_ops_calculator = AircraftOpsCalculator(
             aircraft_data=self.data.aircraft_data,
             airfield_data=departure_airfield_model_builder.build())
-        logger.info(f"Departure airfield wind parameters: {departure_airfield_ops_calculator.get_wind_data()}")
-        logger.info(f"Departure airfield crosswind speed: {departure_airfield_ops_calculator.calculate_xwind_speed()}")
+        logger.info(f"Departure airfield wind parameters: {departure_airfield_ops_calculator.wind}")
+        logger.info(
+            f"Departure airfield crosswind speed: {departure_airfield_ops_calculator.calculate_xwind_speed()} kt")
+        logger.info(
+            f"Departure airfield headwind speed: {departure_airfield_ops_calculator.calculate_headwind_speed()} kt")
+        logger.info(
+            f"Departure airfield density altitude: {departure_airfield_ops_calculator.calculate_density_altitude()} ft")
+        departure_airfield_ops_calculator.calculate_takeoff_distance()
 
         arrival_airfield_ops_calculator = AircraftOpsCalculator(
             aircraft_data=self.data.aircraft_data,
             airfield_data=arrival_airfield_model_builder.build())
-        logger.info(f"Arrival airfield wind parameters: {arrival_airfield_ops_calculator.get_wind_data()}")
-        logger.info(f"Arrival airfield crosswind speed: {arrival_airfield_ops_calculator.calculate_xwind_speed()}")
+        logger.info(f"Arrival airfield wind parameters: {arrival_airfield_ops_calculator.wind}")
+        logger.info(f"Arrival airfield crosswind speed: {arrival_airfield_ops_calculator.calculate_xwind_speed()} kt")
+        logger.info(f"Arrival airfield headwind speed: {arrival_airfield_ops_calculator.calculate_headwind_speed()} kt")
+        logger.info(
+            f"Arrival airfield density altitude: {arrival_airfield_ops_calculator.calculate_density_altitude()} ft")
+        arrival_airfield_ops_calculator.calculate_landing_distance()
 
         return BriefingModel(
             aircraft=self.data.aircraft_data,
@@ -835,8 +1029,8 @@ def create_briefing(briefing_model: BriefingModel) -> Briefing:
 
 app = FastAPI(debug=True, swagger_ui_parameters={"theme": "dark"})
 
-briefing_store: Dict[str, BriefingModel] = {}
-briefing_status: Dict[str, BriefingStatus] = {}
+briefing_store: dict[str, BriefingModel] = {}
+briefing_status: dict[str, BriefingStatus] = {}
 
 
 @app.get(
