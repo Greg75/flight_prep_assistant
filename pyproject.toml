@@ -15,7 +15,8 @@ dependencies = [
     "json2pdf (>=0.2,<0.3)",
     "weasyprint (>=65.1,<66.0)",
     "fastapi (>=0.115.12,<0.116.0)",
-    "uvicorn (>=0.34.3,<0.35.0)"
+    "uvicorn (>=0.34.3,<0.35.0)",
+    "ruff (>=0.14.2,<0.15.0)"
 ]
 
 
@@ -27,5 +28,5 @@ build-backend = "poetry.core.masonry.api"
 pytest = "^8.3.5"
 
 [tool.poetry.group.dev.dependencies]
-ruff = "^0.11.9"
+ruff = ">=0.11.9"
 
