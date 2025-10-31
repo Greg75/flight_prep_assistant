@@ -10,6 +10,7 @@ from .models.request_data import InputData
 logger = getLogger(__name__)
 
 
+# --- Helper functions ---
 def get_input() -> InputData:
     """
     Prompts the user to enter flight planning data via standard input.
@@ -39,7 +40,6 @@ def get_input() -> InputData:
     )
 
 
-# --- Helper functions ---
 def get_time(func):
     """
     Decorator that measures and logs the execution time of the decorated function.

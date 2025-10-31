@@ -34,7 +34,7 @@ class InputData(BaseModel):
             "examples": [
                 {
                     "departure_airfield": "EPKK",
-                    "arrival_airfield": "EPWR",
+                    "arrival_airfield": "KATL",
                     "aircraft_data": {
                         "type": "3XTrim",
                         "mtow": 495,

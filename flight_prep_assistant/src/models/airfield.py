@@ -1,4 +1,3 @@
-#  Submodel for AirfieldModel
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
@@ -89,6 +88,8 @@ class AirfieldModel(BaseModel):
     wind: WindModel = Field(description="Current wind conditions, direction and speed.")
     temperature: float | None = Field(
         default=None,
+        ge=-80,
+        le=60,
         description="Current temperature at the airfield in degrees Celsius.",
     )
     frequency: FrequencyModel = Field(
@@ -104,8 +105,19 @@ class AirfieldModel(BaseModel):
     @field_validator("icaoId")
     @classmethod
     def validate_icao(cls, value: str) -> str:
+        if not value:
+            raise ValueError("ICAO code cannot be empty.")
+
         from flight_prep_assistant.src.helpers import is_not_valid_icao_code
 
+        value = value.strip().upper()
         if is_not_valid_icao_code(icao=value):
-            raise ValueError("Expected 4-letter ICAO airfield code identifier.")
+            raise ValueError(f"Invalid ICAO code: {value}. Expected 4-letter ICAO airfield code identifier.")
+        return value
+
+    @field_validator("runway")
+    @classmethod
+    def validate_runway(cls, value: list[RunwayModel]) -> list[RunwayModel]:
+        if not value:
+            raise ValueError("At least one runway needs to be provided.")
         return value

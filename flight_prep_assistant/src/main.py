@@ -19,9 +19,10 @@ from math import sin, cos, radians, exp
 from starlette.requests import Request
 from weasyprint import HTML
 
-from flight_prep_assistant.src.constants import (GRAVITY_FACTOR,
+from flight_prep_assistant.src.constants import (GRAVITY_FACTOR, TEMP_CORRECTION_FACTOR, FT_PER_HPA_CONVERSION_FACTOR,
                                                  KNOTS_FACTOR, HEIGHT_APPROXIMATION, CALIBRATED_TAKEOFF_FACTOR,
-                                                 CALIBRATED_LANDING_FACTOR)
+                                                 CALIBRATED_LANDING_FACTOR, INHG_TO_HPA_FACTOR, QNH_STD,
+                                                 TEMP_LAPSE_RATE_PER_FOOT_ALT, SEA_LEVEL_STD_TEMP)
 from flight_prep_assistant.src.enums import BriefingStatus, StallSpeedFactor
 from flight_prep_assistant.src.helpers import (is_not_pydantic_model, convert_to_int,
                                                convert_to_tas, get_time)
@@ -92,9 +93,9 @@ class AircraftOpsCalculator:
         self.airfield_data = airfield_data
 
         # --- Aircraft data ---
-        self.landing_distance_at_sea_level: int = int(aircraft_data.landing_distance_at_sea_level)
-        self.xwind_max_speed: float = float(aircraft_data.xwind_max_speed)
-        self.stall_speed: int = int(aircraft_data.stall_speed)
+        self.landing_distance_at_sea_level: int = int(self.aircraft_data.landing_distance_at_sea_level)
+        self.xwind_max_speed: float = float(self.aircraft_data.xwind_max_speed)
+        self.stall_speed: int = int(self.aircraft_data.stall_speed)
 
         # --- Airfield data ---
         self.wind: WindModel = self.airfield_data.wind
@@ -114,8 +115,6 @@ class AircraftOpsCalculator:
                     self.wind.direction
                 except ValueError:
                     self.wind.direction = 0
-        else:
-            self.wind.direction = 0
 
         self.wind.direction %= 360
 
@@ -210,7 +209,7 @@ class AircraftOpsCalculator:
                     pressure = int(token[1:])
                 elif token.startswith("A") and token[1:].isdigit():
                     # Inches of Hg to hPa
-                    pressure = round(float(token[1:]) * 33.8639)
+                    pressure = round(float(token[1:]) * INHG_TO_HPA_FACTOR)
 
                 # Parse temperature (e.g. 15/10)
                 if "/" in token and token.replace("/", "").replace("M", "").isdigit():
@@ -226,58 +225,17 @@ class AircraftOpsCalculator:
 
             # --- Compute pressure altitude ---
             field_elevation = getattr(self, "elevation", 0)
-            pressure_altitude = field_elevation + (1013 - pressure) * 27
+            pressure_altitude = field_elevation + (QNH_STD - pressure) * FT_PER_HPA_CONVERSION_FACTOR
 
             # --- Compute density altitude ---
-            isa_temp = 15 - 0.00198 * field_elevation
-            density_altitude = round(pressure_altitude + (120 * (temperature - isa_temp)))
+            isa_temp = SEA_LEVEL_STD_TEMP - TEMP_LAPSE_RATE_PER_FOOT_ALT * field_elevation
+            density_altitude = round(pressure_altitude + (TEMP_CORRECTION_FACTOR * (temperature - isa_temp)))
 
-            logger.info(f"Density altitude: {density_altitude} ft")
             return density_altitude
 
         except Exception as err:
             logger.error(f"Failed to calculate density altitude | Error: {err}")
             raise RuntimeError("Error calculating density altitude.") from err
-
-    def calculate_takeoff_distance(self) -> list[int]:
-        wind_speeds = self.calculate_headwind_speed()
-        density_altitude = self.calculate_density_altitude()
-        density_ratio = exp(- density_altitude / HEIGHT_APPROXIMATION)
-        takeoff_speed = self.stall_speed * 1.2
-        true_airspeed = convert_to_tas(takeoff_speed, density_ratio)
-        ground_speeds = [(true_airspeed - wind_speed) * KNOTS_FACTOR for wind_speed in wind_speeds]
-        surface_factor = 0.02
-        safety_factor = 1.43
-        takeoff_distance = [
-            round((ground_speed ** 2) /
-                  (2 * GRAVITY_FACTOR * (CALIBRATED_TAKEOFF_FACTOR * density_ratio - surface_factor))
-                  * safety_factor)
-            for ground_speed in ground_speeds
-        ]
-        logger.info(f"Required takeoff distance: {takeoff_distance}")
-
-        return takeoff_distance
-
-    def calculate_landing_distance(self) -> list[int]:
-        wind_speeds = self.calculate_headwind_speed()
-        density_altitude = self.calculate_density_altitude()
-        density_ratio = exp(- density_altitude / HEIGHT_APPROXIMATION)
-        landing_speed = self.stall_speed * 1.3
-        true_airspeed = convert_to_tas(landing_speed, density_ratio)
-        ground_speeds = [(true_airspeed - wind_speed) * KNOTS_FACTOR for wind_speed in wind_speeds]
-        surface_factor = 1.0
-        safety_factor = 1.43
-        landing_distance = [
-            round(
-                ((ground_speed ** 2) /
-                 (2 * GRAVITY_FACTOR * (surface_factor + CALIBRATED_LANDING_FACTOR * density_ratio)))
-                * safety_factor
-            )
-            for ground_speed in ground_speeds
-        ]
-        logger.info(f"Required landing distance: {landing_distance}")
-
-        return landing_distance
 
     def calculate_required_runway_distance(
             self,
@@ -683,7 +641,11 @@ class BriefingGenerator:
             f"Departure airfield headwind speed: {departure_airfield_ops_calculator.calculate_headwind_speed()} kt")
         logger.info(
             f"Departure airfield density altitude: {departure_airfield_ops_calculator.calculate_density_altitude()} ft")
-        departure_airfield_ops_calculator.calculate_takeoff_distance()
+        departure_airfield_ops_calculator.calculate_required_runway_distance(
+            stall_speed_factor=StallSpeedFactor.TAKEOFF,
+            surface_factor=1.0,
+            safety_factor=1.33,
+        )
 
         arrival_airfield_ops_calculator = AircraftOpsCalculator(
             aircraft_data=self.data.aircraft_data,
@@ -693,7 +655,11 @@ class BriefingGenerator:
         logger.info(f"Arrival airfield headwind speed: {arrival_airfield_ops_calculator.calculate_headwind_speed()} kt")
         logger.info(
             f"Arrival airfield density altitude: {arrival_airfield_ops_calculator.calculate_density_altitude()} ft")
-        arrival_airfield_ops_calculator.calculate_landing_distance()
+        arrival_airfield_ops_calculator.calculate_required_runway_distance(
+            stall_speed_factor=StallSpeedFactor.LANDING,
+            surface_factor=1.0,
+            safety_factor=1.43,
+        )
 
         return BriefingModel(
             aircraft=self.data.aircraft_data,
