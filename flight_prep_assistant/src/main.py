@@ -1,15 +1,12 @@
 import logging
 import os
-import re
 import sys
 import time
 from datetime import datetime
-from enum import Enum, IntEnum
-from functools import wraps
+from enum import Enum
 from http.client import HTTPException
 from pathlib import Path
-from typing import Literal, Optional, Self, Any
-from uuid import UUID, uuid4
+from typing import Literal, Optional, Self
 
 import requests
 import uvicorn
@@ -17,14 +14,19 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from jinja2 import Environment, FileSystemLoader, TemplateError
-from math import sin, cos, radians, exp, sqrt
-from pydantic import BaseModel, Field
+from math import sin, cos, radians, exp
+
 from starlette.requests import Request
 from weasyprint import HTML
 
 from flight_prep_assistant.src.constants import (GRAVITY_FACTOR,
                                                  KNOTS_FACTOR, HEIGHT_APPROXIMATION, CALIBRATED_TAKEOFF_FACTOR,
                                                  CALIBRATED_LANDING_FACTOR)
+from flight_prep_assistant.src.enums import BriefingStatus, StallSpeedFactor
+from flight_prep_assistant.src.helpers import (is_not_pydantic_model, convert_to_int,
+                                               convert_to_tas, get_time)
+from flight_prep_assistant.src.models import AircraftModel, AirfieldModel, BriefingModel, ApiParams, AirfieldParams, \
+    RunwayModel, WindModel, FrequencyModel, InputData
 
 load_dotenv()
 
@@ -55,382 +57,6 @@ logger.addHandler(console_handler)
 logger.addHandler(file_handler)
 
 
-# --- Models classes ---
-class RunwayModel(BaseModel):
-    """
-    Represents a runway at an airfield.
-
-    Attributes:
-        direction (str | None): The runway's direction identifier (e.g., "09/27").
-        length (str | None): The total length of the runway, in feet.
-        width (str): The width of the runway, in feet.
-        surface (str): The surface type of the runway (e.g., asphalt, grass).
-    """
-
-    direction: Optional[str] = Field(
-        default=None,
-        pattern=r"^\d{2,3}|\d{2}[L|R]/\d{2,3}|\d{2}[L|R]$",
-        description="The runway's direction identifier.",
-    )
-    length: Optional[str] = Field(
-        default=None,
-        pattern=r"^\d{3,5}$",
-        description="The total length of the runway in feet.",
-    )
-    width: Optional[str] = Field(
-        default=None, pattern=r"^\d{2,3}$", description="The width of the runway."
-    )
-    surface: Optional[str] = Field(
-        default=None,
-        pattern=r"^[a-zA-Z]{1,99}$",
-        description="The surface type of the runway.",
-    )
-
-
-class WindModel(BaseModel):
-    """
-    Represents wind conditions at an airfield.
-
-    Attributes:
-        direction (int | str | None): The wind direction in degrees, or descriptive text.
-        speed (float | None): The wind speed in knots or meters per second.
-    """
-
-    direction: Optional[int | str] = Field(
-        default=None,
-        description="Direction from which wind is blowing or descriptive text.",
-    )
-    speed: Optional[float] = Field(default=None, description="Wind speed in knots.")
-
-
-class FrequencyModel(BaseModel):
-    """
-    Represents communication frequencies for an airfield.
-
-    Attributes:
-        twr (str): Tower frequency.
-    """
-
-    twr: Optional[str] = Field(default=None, description="Tower frequency.")
-
-    model_config = {"extra": "allow"}
-
-
-class AirfieldModel(BaseModel):
-    """
-    Represents an airfield including its runways, weather, and communication data.
-
-    Attributes:
-        icaoId (str): The ICAO identifier for the airfield.
-        runway (List[RunwayModel]): A list of runways at the airfield.
-        elevation (int | None): Elevation of the airfield above sea level in feet.
-        wind (WindModel): Current wind conditions.
-        temperature (float | None): Current temperature at the airfield in degrees Celsius.
-        frequency (FrequencyModel): Communication frequencies for the airfield.
-        metar (str | None): The latest METAR weather report for the airfield.
-        taf (str | None): The latest TAF weather report for the airfield.
-    """
-
-    icaoId: Optional[str] = Field(
-        default=None, description="The ICAO identifier of the airfield."
-    )
-    runway: list[RunwayModel] = Field(description="A list of runways at the airfield.")
-    elevation: Optional[int] = Field(
-        default=None, description="Elevation of the airfield above the sea level."
-    )
-    wind: WindModel = Field(description="Current wind conditions, direction and speed.")
-    temperature: Optional[float] = Field(
-        default=None,
-        description="Current temperature at the airfield in degrees Celsius.",
-    )
-    frequency: FrequencyModel = Field(
-        description="Communication frequencies for the airfield."
-    )
-    metar: Optional[str] = Field(
-        default=None, description="The latest METAR weather report for the airfield."
-    )
-    taf: Optional[str] = Field(
-        default=None, description="The latest TAF report for the airfield."
-    )
-
-
-class AircraftModel(BaseModel):
-    """
-    Represents performance characteristics of an aircraft.
-
-    Attributes:
-        type (str): Aircraft type or model name.
-        mtow (int): Maximum takeoff weight in kilograms or pounds.
-        takeoff_distance_at_sea_level (int): Required takeoff distance at sea level under standard conditions [m / ft].
-        landing_distance_at_sea_level (int): Required landing distance at sea level under standard conditions [m / ft].
-        stall_speed (int): Stall speed of the aircraft in knots.
-        xwind_max_speed (float): Maximum crosswind speed the aircraft can handle, in knots.
-    """
-
-    type: str = Field(min_length=3, description="Aircraft type or model name.")
-    mtow: int = Field(description="Maximum takeoff weight in kilograms or pounds.")
-    takeoff_distance_at_sea_level: int = Field(
-        description="Required takeoff distance at sea level under standard conditions."
-    )
-    landing_distance_at_sea_level: int = Field(
-        description="Required landing distance at sea level under standard conditions."
-    )
-    stall_speed: int = Field(description="Stall speed of the aircraft in knots.")
-    xwind_max_speed: float = Field(
-        description="Maximum crosswinds speed the aircraft can handle, in knots."
-    )
-
-
-class RecommendationModel(BaseModel):
-    takeoff_distance: int = Field(
-        description="The calculated ground roll distance required for takeoff under current conditions in feet"
-    )  # versus runway length
-    landing_distance: int = Field(
-        description="The calculated landing rollout distance under current conditions in feet"
-    )  # versus runway length
-    crosswind_speed: float = Field(
-        description="The computed crosswind component acting perpendicular to the runway centerline (in knots)"
-    )  # versus crosswind limits for aircraft
-    tailwind_speed: float = Field(
-        description="The computed tailwind component acting along the runway in the same direction as "
-                    "the aircraft's movement (in knots)."
-    )
-    visibility: int = Field(
-        description="The prevailing horizontal visibility at the airfield, expressed in meters."
-    )  # versus minimum for VFR/IFR flight
-    cloud_base: int = Field(
-        description="The height of the lowest cloud layer above ground level (AGL) that covers more "
-                    "than half of the sky, expressed in feet"
-    )  # versus minimum for VFR/IFR flight
-    recommendation: Literal["NO GO", "GO IFR", "GO VFR"] = Field(
-        default="NO GO",
-        description="Flight recommendation based on the briefing."
-    )
-
-
-class BriefingModel(BaseModel):
-    """
-    Represents a complete preflight briefing package for a pilot.
-
-    This model consolidates essential information about the aircraft,
-    departure and arrival airfields, and provides a computed recommendation
-    based on current operational and meteorological conditions.
-
-    Attributes:
-        briefing_id (UUID): A unique identifier for the generated briefing instance.
-        aircraft (AircraftModel): Detailed specifications and performance data for the selected aircraft.
-        departure_airfield (AirfieldModel): Information about the departure airfield,
-            including runway configuration, weather, and operational parameters.
-        arrival_airfield (AirfieldModel): Information about the arrival airfield,
-            including runway configuration, weather, and operational parameters.
-        recommendation (RecommendationModel): Operational summary and final flight recommendation
-            produced by the performance calculator, integrating aircraft and weather data
-            to determine flight feasibility under VFR or IFR conditions.
-    """
-
-    briefing_id: UUID = Field(default_factory=uuid4, description="Unique briefing ID.")
-    aircraft: AircraftModel = Field(
-        description="Information about the aircraft used for the flight."
-    )
-    departure_airfield: AirfieldModel = Field(
-        description="Data about the departure airfield including weather."
-    )
-    arrival_airfield: AirfieldModel = Field(
-        description="Data about the arrival airfield including weather."
-    )
-    recommendation: RecommendationModel = Field(
-        description="Operational insights and the final flight recommendation generated by the "
-                    "performance calculator, summarizing key findings from the preflight briefing."
-    )
-
-
-class BriefingStatus(IntEnum):
-    """
-    Enum representing the various states of a briefing process.
-
-    Attributes:
-        PENDING: Represents a briefing that is yet to start.
-        IN_PROGRESS: Represents a briefing that is currently underway.
-        COMPLETE: Represents a briefing that has been successfully finished.
-        ERROR: Represents a briefing that encountered an error during processing.
-    """
-
-    PENDING = 1
-    IN_PROGRESS = 2
-    COMPLETE = 3
-    ERROR = -1
-
-
-class InputData(BaseModel):
-    """
-    Represents input data required for flight planning.
-
-    Attributes:
-        departure_airfield (str): The ICAO code of the departure airfield. Must be exactly 4 alphabetical characters.
-        arrival_airfield (str): The ICAO code of the arrival airfield. Must be exactly 4 alphabetical characters.
-        aircraft_data (str): The aircraft type identifier. Must be at least 4 characters long.
-    """
-
-    departure_airfield: str = Field(
-        min_length=4,
-        max_length=4,
-        pattern=r"^[A-Za-z]{4}$",
-        description="The ICAO code of the departure airfield.",
-    )
-    arrival_airfield: str = Field(
-        min_length=4,
-        max_length=4,
-        pattern=r"^[A-Za-z]{4}$",
-        description="The ICAO code of the arrival airfield.",
-    )
-    aircraft_data: AircraftModel = Field(
-        description="The aircraft data collected according to the AircraftModel structure."
-    )
-
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
-                {
-                    "departure_airfield": "EPKK",
-                    "arrival_airfield": "EPWR",
-                    "aircraft_data": {
-                        "type": "3XTrim",
-                        "mtow": 495,
-                        "takeoff_distance_at_sea_level": 918,
-                        "landing_distance_at_sea_level": 918,
-                        "stall_speed": 38,
-                        "xwind_max_speed": 12,
-                    },
-                }
-            ]
-        }
-    }
-
-
-class OpsCalculatorInputData(BaseModel):
-    aircraft_data: AircraftModel = Field(description="")
-    airfield_data: AirfieldModel = Field(description="")
-
-
-class ApiParams(BaseModel):
-    """
-    The base parameter for API request.
-
-    Attributes:
-        format (str): The expected format of the API response (e.g., "json", "xml"). Defaults to "json".
-    """
-
-    format: str = Field(
-        default="json", description="The expected format of the API response."
-    )
-
-
-class AirfieldParams(ApiParams):
-    """
-    Parameters specific to airfield data API requests.
-
-    Attributes:
-        ids (str): The ICAO identifier of the airfield to query.
-        taf (str): Whether to include TAF (Terminal Aerodrome Forecast) data in the response. Defaults to "true".
-    """
-
-    ids: str = Field(description="The ICAO identifier of the airfield to query.")
-    taf: str = Field(default="true", description="Weather to include TAF.")
-
-
-class AircraftParams(ApiParams):
-    """
-    Parameters specific to aircraft data API requests.
-
-    Attributes:
-        api_key (str): The API key used for authentication and authorization.
-        manufacturer (str): The name of the aircraft manufacturer to filter the results (e.g., "Boeing", "Airbus").
-    """
-
-    api_key: str = Field(
-        description="The API key used for authentication and authorization."
-    )
-    manufacturer: str = Field(description="The name of the aircraft manufacturer.")
-
-
-# --- Helper functions ---
-def get_time(func):
-    """
-    Decorator that measures and logs the execution time of the decorated function.
-
-    Uses high-resolution timer (`time.perf_counter_ns`) to calculate elapsed time
-    in seconds with nanosecond precision. The timing result is logged using the `logger`.
-
-    Args:
-        func (Callable): The function to wrap and time.
-
-    Returns:
-        Callable: The wrapped function with execution time logging.
-
-    Example:
-        @get_time
-        def compute():
-            # some expensive operation
-            pass
-    """
-    @wraps(func)
-    def inner(*args, **kwargs):
-        start_time = time.perf_counter_ns()
-        logger.info(f"[Timing] Started '{func.__name__}' at {start_time} ns.")
-        result = func(*args, **kwargs)
-        elapsed_ns = time.perf_counter_ns() - start_time
-        elapsed_sec = elapsed_ns * 1e-9
-        logger.info(f"[Timing] Completed '{func.__name__}' | Duration: {elapsed_sec:.6f} s ({elapsed_ns} ns).")
-        return result
-    return inner
-
-
-def convert_to_int(runways_direction: list[str]) -> set[int]:
-    """
-    Convert a list of runway direction strings into a set of integers.
-    Handles letters, slashes, empty items, and logs the result.
-    """
-    converted = set()
-    for rwy in runways_direction:
-        try:
-            nums = re.findall(
-                pattern=r"\d+",
-                string=rwy)
-            if nums:
-                converted.add(int(nums[0]))
-        except Exception as e:
-            logger.warning(f"Skipping invalid runway entry '{rwy}': {e}")
-
-    logger.info(f"Runways extracted, converted to integers: {converted}")
-    return converted
-
-
-def convert_to_tas(ias: float, density_ratio: float) -> int:
-    """
-    Convert indicated airspeed (IAS) to true airspeed (TAS) given the air density.
-
-    True airspeed increases as air density decreases. This function uses the
-    standard relation between IAS and TAS:
-
-        TAS = IAS / sqrt(density_ratio)
-
-    where 'density_ratio' is the ratio of air density at the current altitude
-    to the standard sea-level air density (σ = ρ / ρ0).
-
-    Args:
-        ias (float): Indicated airspeed in knots.
-        density_ratio (float): Air density ratio (0 < σ ≤ 1).
-
-    Returns:
-        int: True airspeed in knots, rounded to the nearest integer.
-    """
-    return round(ias / sqrt(density_ratio))
-
-
-def is_within_limits():
-    pass
-
-
 # --- Base classes ---
 class AircraftOpsCalculator:
     """
@@ -443,8 +69,6 @@ class AircraftOpsCalculator:
         aircraft_data (dict): Serialized data of the aircraft model.
         airfield_data (dict): Serialized data of the airfield model.
         wind (dict): Dictionary containing wind parameters such as speed and direction.
-        wind_speed (float): Wind speed value extracted from airfield data.
-        wind_direction (float): Wind direction in degrees, extracted from airfield data.
         runways_direction (list[int]): List of runway directions converted to integers.
     """
 
@@ -460,42 +84,40 @@ class AircraftOpsCalculator:
             AttributeError: If the provided models are missing expected attributes.
         """
         # --- Verify model like inputs ---
-        if not hasattr(aircraft_data, "model_dump") or not hasattr(airfield_data, "model_dump"):
+        if is_not_pydantic_model(aircraft_data, airfield_data):
             raise RuntimeError("Expected Pydantic models with .model_dump() method.")
 
-        # --- Dump dicts ---
-        self.aircraft_data = aircraft_data.model_dump()
-        self.airfield_data = airfield_data.model_dump()
+        # --- Aircraft and airfield data instances ---
+        self.aircraft_data = aircraft_data
+        self.airfield_data = airfield_data
 
         # --- Aircraft data ---
-        self.takeoff_distance_at_sea_level: int = int(self.aircraft_data.get("takeoff_distance_at_sea_level", 0))
-        self.landing_distance_at_sea_level: int = int(self.aircraft_data.get("landing_distance_at_sea_level", 0))
-        self.xwind_max_speed: float = float(self.aircraft_data.get("xwind_max_speed", 0.0))
-        self.stall_speed: int = int(self.aircraft_data.get("stall_speed", 0))
+        self.landing_distance_at_sea_level: int = int(aircraft_data.landing_distance_at_sea_level)
+        self.xwind_max_speed: float = float(aircraft_data.xwind_max_speed)
+        self.stall_speed: int = int(aircraft_data.stall_speed)
 
         # --- Airfield data ---
-        self.wind: dict[str, Any] = self.airfield_data.get("wind", {})
+        self.wind: WindModel = self.airfield_data.wind
 
         # --- Handle and normalize wind speed
         try:
-            self.wind_speed: float = self.wind.get("speed", 0.0) or 0.0
+            self.wind.speed
         except (TypeError, ValueError):
-            self.wind_speed = 0.0
+            self.wind.speed = 0.0
 
-        raw_dir = self.wind.get("direction", 0.0) or 0.0
-        if isinstance(raw_dir, str):
-            if raw_dir.strip().upper() in {"VRB", "CALM", "VAR", ""}:
-                self.wind_direction = 0.0
+        # --- Handle and normalize wind direction
+        if isinstance(self.wind.direction, str):
+            if self.wind.direction.strip().upper() in {"VRB", "CALM", "VAR", ""}:
+                self.wind.direction = 0
             else:
                 try:
-                    self.wind_direction = float(raw_dir)
+                    self.wind.direction
                 except ValueError:
-                    self.wind_direction = 0.0
+                    self.wind.direction = 0
         else:
-            self.wind_direction = 0.0
+            self.wind.direction = 0
 
-        # --- Normalize wind direction
-        self.wind_direction %= 360
+        self.wind.direction %= 360
 
         # --- Parse runways direction ---
         self.runways_direction: set[int] = convert_to_int(self.get_runways_direction())
@@ -510,11 +132,11 @@ class AircraftOpsCalculator:
         Raises:
             RuntimeError: If runway direction data cannot be retrieved or parsed correctly.
         """
-        runways = self.airfield_data.get("runway", [])
+        runways = self.airfield_data.runway
         try:
             runways_direction = [direction
                                  for runway in runways
-                                 for direction in runway.get("direction", "").split('/')
+                                 for direction in runway.direction.split('/')
                                  ]
 
             return runways_direction
@@ -538,7 +160,7 @@ class AircraftOpsCalculator:
 
         # --- Calculations ---
         xwind_speeds = [
-            round(self.wind_speed * (sin(radians(self.wind_direction - runway_direction * 10))), 1)
+            round(self.wind.speed * (sin(radians(self.wind.direction - runway_direction * 10))), 1)
             for runway_direction in runways_directions
         ]
 
@@ -559,7 +181,7 @@ class AircraftOpsCalculator:
 
         # --- Calculations ---
         headwinds_speed = [
-            round(self.wind_speed * (cos(radians(self.wind_direction - runway_direction * 10))), 1)
+            round(self.wind.speed * (cos(radians(self.wind.direction - runway_direction * 10))), 1)
             for runway_direction in runways_directions
         ]
 
@@ -570,7 +192,7 @@ class AircraftOpsCalculator:
         Calculate density altitude based on the provided METAR data.
         Falls back to standard pressure altitude if METAR is missing.
         """
-        metar = self.airfield_data.get("metar", None)
+        metar = self.airfield_data.metar
 
         try:
             # --- Handle missing METAR ---
@@ -620,7 +242,7 @@ class AircraftOpsCalculator:
     def calculate_takeoff_distance(self) -> list[int]:
         wind_speeds = self.calculate_headwind_speed()
         density_altitude = self.calculate_density_altitude()
-        density_ratio = exp(- density_altitude/HEIGHT_APPROXIMATION)
+        density_ratio = exp(- density_altitude / HEIGHT_APPROXIMATION)
         takeoff_speed = self.stall_speed * 1.2
         true_airspeed = convert_to_tas(takeoff_speed, density_ratio)
         ground_speeds = [(true_airspeed - wind_speed) * KNOTS_FACTOR for wind_speed in wind_speeds]
@@ -656,6 +278,63 @@ class AircraftOpsCalculator:
         logger.info(f"Required landing distance: {landing_distance}")
 
         return landing_distance
+
+    def calculate_required_runway_distance(
+            self,
+            stall_speed_factor: StallSpeedFactor,
+            surface_factor: float = 1.0,
+            safety_factor: float = 0.0
+    ) -> list[int]:
+        """
+        Calculates the required runway distance for takeoff or landing.
+
+        Args:
+            stall_speed_factor: StallSpeedFactor Enum (TAKEOFF=1.2, LANDING=1.3)
+            surface_factor: Runway surface correction (friction etc.)
+            safety_factor: Safety margin multiplier (≥1.0)
+
+        Returns:
+            List[int]: Required runway distances for each wind direction (in feet)
+        """
+        # ---Base calculations ---
+        wind_speeds = self.calculate_headwind_speed()
+        density_altitude = self.calculate_density_altitude()
+        density_ratio = exp(- density_altitude / HEIGHT_APPROXIMATION)
+
+        required_speed = self.stall_speed * stall_speed_factor.value
+        true_airspeed = convert_to_tas(required_speed, density_ratio)
+        ground_speeds = [(true_airspeed - wind_speed) * KNOTS_FACTOR for wind_speed in wind_speeds]
+
+        # --- Choose formula based on operation type ---
+        surface_factor = surface_factor
+        safety_factor = safety_factor
+
+        if stall_speed_factor == StallSpeedFactor.TAKEOFF:
+            factor = CALIBRATED_TAKEOFF_FACTOR * density_ratio - surface_factor
+            phase = "takeoff"
+        else:
+            factor = surface_factor + CALIBRATED_LANDING_FACTOR * density_ratio
+            phase = "landing"
+
+        # --- Compute required runway distance ---
+        runway_distance = [
+            round(
+                ((ground_speed ** 2) / (2 * GRAVITY_FACTOR * factor)) * safety_factor
+            )
+            for ground_speed in ground_speeds
+        ]
+        logger.info(f"Required {phase} distance: {runway_distance}")
+
+        return runway_distance
+
+    def check_visibility(self) -> int:
+        pass
+
+    def check_cloud_base(self) -> int:
+        pass
+
+    def submit_recommendation(self) -> Literal["NO GO", "GO IFR", "GO VFR"]:
+        pass
 
 
 class Briefing:
@@ -811,7 +490,7 @@ class AirfieldModelBuilder:
         self.airfield_records = {}
 
     def add_airfield_data(
-        self, airfield_api: ApiClient, params: AirfieldParams
+            self, airfield_api: ApiClient, params: AirfieldParams
     ) -> Self:
         """
         Loads airfield data from the provided API and updates internal records.
@@ -945,7 +624,7 @@ class BriefingGenerator:
     """
 
     def __init__(
-        self, data: InputData, airfield_api: ApiClient, weather_api: ApiClient
+            self, data: InputData, airfield_api: ApiClient, weather_api: ApiClient
     ) -> None:
         """
         Initialize the BriefingGenerator instance with input data and API clients.
@@ -971,9 +650,12 @@ class BriefingGenerator:
         Returns:
             BriefingModel: A structured model containing aircraft, airfield, and weather data.
         """
+        # --- Creating model builders instances ---
         departure_airfield_model_builder = AirfieldModelBuilder()
         arrival_airfield_model_builder = AirfieldModelBuilder()
+        # recommendation_model_builder = RecommendationModelBuilder()
 
+        # --- Adding data to build airfield models ---
         departure_airfield_model_builder.add_airfield_data(
             airfield_api=self.airfield_api, params=self.departure_params
         )
@@ -986,6 +668,10 @@ class BriefingGenerator:
         arrival_airfield_model_builder.add_weather_data(
             weather_api=self.weather_api, params=self.arrival_params
         )
+
+        # --- Building airfield and recommendation models ---
+        departure_airfield = departure_airfield_model_builder.build()
+        arrival_airfield = arrival_airfield_model_builder.build()
 
         departure_airfield_ops_calculator = AircraftOpsCalculator(
             aircraft_data=self.data.aircraft_data,
@@ -1011,13 +697,14 @@ class BriefingGenerator:
 
         return BriefingModel(
             aircraft=self.data.aircraft_data,
-            departure_airfield=departure_airfield_model_builder.build(),
-            arrival_airfield=arrival_airfield_model_builder.build(),
+            departure_airfield=departure_airfield,
+            arrival_airfield=arrival_airfield,
+            recommendation="NO GO",
         )
 
 
 def create_airfield_model(
-    airfield_api: ApiClient, weather_api: ApiClient, airfield_api_params: AirfieldParams
+        airfield_api: ApiClient, weather_api: ApiClient, airfield_api_params: AirfieldParams
 ) -> AirfieldModel:
     """
     Build an AirfieldModel using the given API clients and parameters.
@@ -1066,7 +753,7 @@ briefing_status: dict[str, BriefingStatus] = {}
     path="/",
     summary="Root endpoint for Briefing API",
     description="This is the root endpoint of the Briefing API. It simply returns a message indicating "
-    "that the API is running and operational.",
+                "that the API is running and operational.",
 )
 def root() -> dict:
     """
@@ -1083,7 +770,7 @@ def root() -> dict:
     path="/ping",
     summary="Ping the API to check its health",
     description="This endpoint returns a status message indicating that the API is healthy and responsive. "
-    "It's often used to check if the API is up and running.",
+                "It's often used to check if the API is up and running.",
 )
 def ping_api() -> dict:
     """
@@ -1101,8 +788,8 @@ def ping_api() -> dict:
     response_model=BriefingModel,
     summary="Generate a flight briefing based on input data",
     description="This endpoint generates a flight briefing based on the provided input data, "
-    "including details like departure and arrival airfields. It returns a structured "
-    "BriefingModel containing all briefing information for the flight.",
+                "including details like departure and arrival airfields. It returns a structured "
+                "BriefingModel containing all briefing information for the flight.",
 )
 def generate_briefing(data: InputData) -> BriefingModel:
     """
@@ -1147,8 +834,8 @@ def generate_briefing(data: InputData) -> BriefingModel:
     response_class=FileResponse,
     summary="Download a briefing as a PDF",
     description="This endpoint allows you to download a generated flight briefing as a PDF "
-    "using the provided briefing ID. If the briefing ID is invalid, a 404 error will be returned. "
-    "If there are issues during PDF generation, a 500 error will be raised.",
+                "using the provided briefing ID. If the briefing ID is invalid, a 404 error will be returned. "
+                "If there are issues during PDF generation, a 500 error will be raised.",
 )
 @get_time
 def download_briefing(request: Request, briefing_id: str) -> FileResponse:
@@ -1200,8 +887,8 @@ def download_briefing(request: Request, briefing_id: str) -> FileResponse:
     path="/briefing/{briefing_id}/status",
     summary="Check the status of a briefing",
     description="This endpoint allows you to retrieve the current status of a briefing by providing "
-    "the briefing ID. If the briefing ID exists, it returns the corresponding status. "
-    "If the briefing ID is invalid, the status will be `None` or an error.",
+                "the briefing ID. If the briefing ID exists, it returns the corresponding status. "
+                "If the briefing ID is invalid, the status will be `None` or an error.",
 )
 def check_status(briefing_id: str) -> dict:
     """
