@@ -6,7 +6,7 @@
   <style>
     @page {
       size: A4 portrait;
-      margin: 20mm;
+      margin: 6mm;
     }
 
     body {
@@ -70,6 +70,11 @@
     }
 
     .elevation {
+      text-align: center;
+      margin-bottom: 6px;
+    }
+
+    .condition {
       text-align: center;
       margin-bottom: 6px;
     }
@@ -288,16 +293,84 @@
           <td class="italic-small">{{ aircraft.takeoff_distance_at_sea_level }}</td>
           <td class="italic-small">{{ aircraft.landing_distance_at_sea_level }}</td>
           <td class="italic-small">{{ aircraft.stall_speed }}</td>
-          <td class="italic-small">{{ aircraft.xwind_max_speed }}</td>
+          <td class="italic-small">{{ aircraft.crosswind_max_speed }}</td>
         </tr>
       </tbody>
     </table>
   </div>
 
+  <!-- NEW: Airfield Operational Data -->
+  <div class="airfield-wrapper">
+
+  <!-- Departure Conditions -->
+  <div class="airfield-cell">
+      <h2><span class="section-title">Departure conditions</span></h2>
+      <p class="condition"><span class="normal-data"><strong>{{ departure.icaoId }}</strong></span></p>
+    <table class="detail-table">
+      <tr>
+        <th>Runway Direction</th>
+        <th>Runway Distance Required (ft)</th>
+        <th>Crosswind (kt)</th>
+        <th>Headwind (kt)</th>
+        <th>Visibility (m)</th>
+        <th>Cloud Base (ft)</th>
+      </tr>
+      {% for i in range(departure_conditions.runway_distance|length) %}
+      <tr>
+        <td class="italic-small">{{ departure_conditions.runway_direction[i] or "-"}}</td>
+        <td class="italic-small">{{ departure_conditions.runway_distance[i] }}</td>
+        <td class="italic-small">{{ departure_conditions.crosswind_speed[i] }}</td>
+        <td class="italic-small">{{ departure_conditions.headwind_speed[i] }}</td>
+        {% if i == 0 %}
+          <td class="italic-small" rowspan="{{ departure_conditions.runway_distance|length }}">
+            {{ departure_conditions.visibility }}
+          </td>
+          <td class="italic-small" rowspan="{{ departure_conditions.runway_distance|length }}">
+            {{ departure_conditions.cloud_base }}
+          </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <!-- Arrival Conditions -->
+  <div class="airfield-cell">
+      <h2><span class="section-title">Arrival conditions</span></h2>
+      <p class="condition"><span class="normal-data"><strong>{{ arrival.icaoId }}</strong></span></p>
+    <table class="detail-table">
+      <tr>
+        <th>Runway Direction</th>
+        <th>Runway Distance Required (ft)</th>
+        <th>Crosswind (kt)</th>
+        <th>Headwind (kt)</th>
+        <th>Visibility (m)</th>
+        <th>Cloud Base (ft)</th>
+      </tr>
+      {% for i in range(arrival_conditions.runway_distance|length) %}
+      <tr>
+        <td class="italic-small">{{ arrival_conditions.runway_direction[i] or "-"}}</td>
+        <td class="italic-small">{{ arrival_conditions.runway_distance[i] }}</td>
+        <td class="italic-small">{{ arrival_conditions.crosswind_speed[i] }}</td>
+        <td class="italic-small">{{ arrival_conditions.headwind_speed[i] }}</td>
+        {% if i == 0 %}
+          <td class="italic-small" rowspan="{{ arrival_conditions.runway_distance|length }}">
+            {{ arrival_conditions.visibility }}
+          </td>
+          <td class="italic-small" rowspan="{{ arrival_conditions.runway_distance|length }}">
+            {{ arrival_conditions.cloud_base }}
+          </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  </div>
+
   <!-- Recommendation -->
   <div class="full-width-section">
-    <div class="section-title">Recommendation</div>
-    <p><strong>Status:</strong> <span class="italic-small">{{ recommendation }}</span></p>
+    <div class="section-title">Recommendation: {{ recommendation }} </div>
   </div>
 
 </body>
