@@ -3,7 +3,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from http.client import HTTPException
 from pathlib import Path
@@ -27,7 +27,7 @@ from flight_prep_assistant.src.constants import (GRAVITY_FACTOR, TEMP_CORRECTION
                                                  STATUE_MILE_TO_METERS)
 from flight_prep_assistant.src.enums import BriefingStatus, StallSpeedFactor
 from flight_prep_assistant.src.helpers import is_not_pydantic_model, convert_to_tas, get_time, is_greater, \
-    submit_final_recommendation
+    submit_final_recommendation, remove_duplicates_elements
 from flight_prep_assistant.src.models import AircraftModel, AirfieldModel, BriefingModel, ApiParams, AirfieldParams, \
     RunwayModel, WindModel, FrequencyModel, InputData, RecommendationBaseModel
 
@@ -102,7 +102,9 @@ class AircraftOpsCalculator:
         self.wind: WindModel = self.airfield_data.wind
 
         # --- Parse runways direction ---
-        self.runways_direction = [direction for runway in self.airfield_data.runway for direction in runway.direction]
+        self.runways_direction = remove_duplicates_elements(
+            [direction for runway in self.airfield_data.runway for direction in runway.direction]
+        )
 
     def calculate_crosswind_speed(self) -> list[int]:
         """
@@ -463,6 +465,7 @@ class Briefing:
         try:
             template = environment.get_template("briefing.html")
             html_output = template.render(
+                timestamp=datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M'),
                 departure=self.departure,
                 arrival=self.arrival,
                 aircraft=self.aircraft,
@@ -755,8 +758,6 @@ class BriefingGenerator:
         # --- Building airfield models ---
         departure_airfield = departure_airfield_model_builder.build()
         arrival_airfield = arrival_airfield_model_builder.build()
-
-        logger.info(f"Parsed runways of departure airfield: {departure_airfield.runway}")
 
         # --- Building departure airfield data and recommendation model ---
         departure_airfield_ops_calculator = AircraftOpsCalculator(
