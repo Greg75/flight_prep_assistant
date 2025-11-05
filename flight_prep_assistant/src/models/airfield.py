@@ -1,4 +1,10 @@
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+import re
+from typing import Self
+
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator, ValidationInfo
+import logging
+
+logger = logging.getLogger()
 
 
 class RunwayModel(BaseModel):
@@ -6,25 +12,22 @@ class RunwayModel(BaseModel):
     Represents a runway at an airfield.
 
     Attributes:
-        direction (str | None): The runway's direction identifier (e.g., "09/27").
-        length (str | None): The total length of the runway, in feet.
-        width (str): The width of the runway, in feet.
-        surface (str): The surface type of the runway (e.g., asphalt, grass).
+        direction (set[int] | None): The runway's direction identifier (e.g., "09/27").
+        length (int | None): The total length of the runway, in feet.
+        width (int | None): The width of the runway, in feet.
+        surface (str | None): The surface type of the runway (e.g., asphalt, grass).
     """
 
-    direction: str | None = Field(
+    direction: list[int] | None = Field(
         default=None,
-        pattern=r"^\d{2,3}|\d{2}[L|R]/\d{2,3}|\d{2}[L|R]$",
-        description="The runway's direction identifier.",
+        description="The runway's direction.",
     )
-    length: str | None = Field(
+    length: int | None = Field(
         default=None,
-        pattern=r"^\d{3,5}$",
         description="The total length of the runway in feet.",
     )
-    width: str | None = Field(
+    width: int | None = Field(
         default=None,
-        pattern=r"^\d{2,3}$",
         description="The width of the runway."
     )
     surface: str | None = Field(
@@ -32,6 +35,57 @@ class RunwayModel(BaseModel):
         pattern=r"^[a-zA-Z]{1,99}$",
         description="The surface type of the runway.",
     )
+
+    @field_validator("direction", mode="before")
+    @classmethod
+    def validate_direction(cls, value):
+        """
+        Normalize and convert runway direction strings (like '09/27', '09L/27R') into a set of ints {9, 27}.
+        """
+        if value is None:
+            return None
+
+        pattern = re.compile(r"\d{2}")
+        logger.info(f"Runway value in validate_direction RwyModel: {value}")
+
+        # If already a list of ints, return as-is
+        if isinstance(value, list) and all(isinstance(v, int) for v in value):
+            return value
+
+        # Convert list of strings or mixed values into one string
+        if isinstance(value, list):
+            joined = "".join(map(str, value))
+            matches = pattern.findall(joined)
+            return [int(m) for m in matches]
+
+        # Handle plain string input (e.g., "09/27" or "09L/27R")
+        if isinstance(value, str):
+            matches = pattern.findall(value)
+            return [int(m) for m in matches]
+
+        raise TypeError(f"Unexpected type for runway direction: {type(value)}.")
+
+    @field_validator("length", "width", mode="before")
+    @classmethod
+    def validate_length(cls, value: str, info: ValidationInfo) -> int | None:
+        if value is None:
+            return None
+
+        if isinstance(value, str):
+            cleaned = re.sub(r"\D", "", value)
+            if not cleaned:
+                raise ValueError(f"No numeric data found for {info.field_name}: {value!r}")
+            return int(cleaned)
+
+        if isinstance(value, int):
+            return value
+
+        raise TypeError(f"Unexpected type of the runway {info.field_name}: {type(value).__name__}.")
+
+    @field_validator("surface")
+    @classmethod
+    def validate_surface(cls, value: str | None) -> str | None:
+        return value.lower() if value else None
 
 
 class WindModel(BaseModel):
@@ -47,7 +101,27 @@ class WindModel(BaseModel):
         default=None,
         description="Direction from which wind is blowing or descriptive text.",
     )
-    speed: float | None = Field(default=None, description="Wind speed in knots.")
+    speed: int = Field(ge=0, description="Wind speed in knots.")
+    gust: int | None = Field(default=None, description="Wind gusts in knots.")
+
+    @field_validator("direction")
+    @classmethod
+    def validate_direction(cls, value: int | str | None) -> int:
+        if isinstance(value, str):
+            if value.upper() in {"VRB", "CALM", "VAR", ""}:
+                return 0
+            if value.isdigit():
+                return int(value) % 360
+            raise ValueError(f"Invalid wind direction: {value}.")
+
+        return value % 360
+
+    @model_validator(mode="after")
+    def validate_gust_vs_speed(self) -> Self:
+        if self.gust is not None and self.gust < self.speed:
+            raise ValueError("Wind gust must be greater than wind speed.")
+
+        return self
 
 
 class FrequencyModel(BaseModel):
@@ -57,10 +131,14 @@ class FrequencyModel(BaseModel):
     Attributes:
         twr (str): Tower frequency.
     """
+    model_config = ConfigDict(extra="allow")
 
     twr: str | None = Field(default=None, description="Tower frequency.")
 
-    model_config = ConfigDict(extra="allow")
+    @field_validator("twr")
+    @classmethod
+    def validate_twr_freq(cls, value: str | None) -> str | None:
+        return value.strip() if value else None
 
 
 class AirfieldModel(BaseModel):
@@ -108,10 +186,8 @@ class AirfieldModel(BaseModel):
         if not value:
             raise ValueError("ICAO code cannot be empty.")
 
-        from flight_prep_assistant.src.helpers import is_not_valid_icao_code
-
         value = value.strip().upper()
-        if is_not_valid_icao_code(icao=value):
+        if not re.fullmatch(r"[A-Z]{4}", value):
             raise ValueError(f"Invalid ICAO code: {value}. Expected 4-letter ICAO airfield code identifier.")
         return value
 
@@ -119,5 +195,17 @@ class AirfieldModel(BaseModel):
     @classmethod
     def validate_runway(cls, value: list[RunwayModel]) -> list[RunwayModel]:
         if not value:
-            raise ValueError("At least one runway needs to be provided.")
+            raise ValueError("Airfield must include at least one runway.")
         return value
+
+    @field_validator("elevation")
+    @classmethod
+    def validate_elevation(cls, value: int | None) -> int | None:
+        if value is not None and not (-1000 <= value <= 15000):
+            raise ValueError("Elevation must be between -1000 and 15000 ft.")
+        return value
+
+    @field_validator("temperature")
+    @classmethod
+    def validate_temperature(cls, value: float | None) -> float | None:
+        return round(value, 1) if value is not None else None

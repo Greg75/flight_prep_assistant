@@ -6,14 +6,17 @@ from pydantic import BaseModel, Field
 class RecommendationBaseModel(BaseModel):
     """Operational and environmental metrics for an airfield."""
 
+    runway_direction: list[int] = Field(
+        description="Runways direction."
+    )
     runway_distance: list[int] = Field(
-        description="The calculated landing rollout distance under current conditions in feet"
+        description="Landing roll distance computed for current conditions, in feet."
     )  # versus runway length
     crosswind_speed: list[float] = Field(
-        description="The computed crosswind component acting perpendicular to the runway centerline (in knots)"
+        description="The computed crosswind component acting perpendicular to the runway centerline (in knots)."
     )  # versus crosswind limits for aircraft
-    tailwind_speed: list[float] = Field(
-        description="The computed tailwind component acting along the runway in the same direction as "
+    headwind_speed: list[float] = Field(
+        description="The computed tailwind component acting along the runway in the opposite direction as "
                     "the aircraft's movement (in knots)."
     )
     visibility: int = Field(
@@ -21,7 +24,7 @@ class RecommendationBaseModel(BaseModel):
     )  # versus minimum for VFR/IFR flight
     cloud_base: int = Field(
         description="The height of the lowest cloud layer above ground level (AGL) that covers more "
-                    "than half of the sky, expressed in feet"
+                    "than half of the sky, expressed in feet."
     )  # versus minimum for VFR/IFR flight
 
 
@@ -43,4 +46,4 @@ class RecommendationFinalModel(BaseModel):
 
     departure: RecommendationExtendModel
     arrival: RecommendationExtendModel
-    overall_recommendation: Literal["NO GO", "GO IFR", "GO VFR"]
+    final_recommendation: Literal["NO GO", "GO IFR", "GO VFR"]

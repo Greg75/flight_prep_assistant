@@ -33,7 +33,7 @@ class InputData(BaseModel):
         "json_schema_extra": {
             "examples": [
                 {
-                    "departure_airfield": "EPKK",
+                    "departure_airfield": "KATL",
                     "arrival_airfield": "KATL",
                     "aircraft_data": {
                         "type": "3XTrim",
@@ -41,7 +41,7 @@ class InputData(BaseModel):
                         "takeoff_distance_at_sea_level": 918,
                         "landing_distance_at_sea_level": 918,
                         "stall_speed": 38,
-                        "xwind_max_speed": 12,
+                        "crosswind_max_speed": 12,
                     },
                 }
             ]
