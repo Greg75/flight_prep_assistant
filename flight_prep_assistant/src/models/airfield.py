@@ -2,9 +2,6 @@ import re
 from typing import Self
 
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator, ValidationInfo
-import logging
-
-logger = logging.getLogger()
 
 
 class RunwayModel(BaseModel):
@@ -38,7 +35,7 @@ class RunwayModel(BaseModel):
 
     @field_validator("direction", mode="before")
     @classmethod
-    def validate_direction(cls, value):
+    def validate_direction(cls, value: list) -> list | None:
         """
         Normalize and convert runway direction strings (like '09/27', '09L/27R') into a set of ints {9, 27}.
         """
@@ -46,7 +43,6 @@ class RunwayModel(BaseModel):
             return None
 
         pattern = re.compile(r"\d{2}")
-        logger.info(f"Runway value in validate_direction RwyModel: {value}")
 
         # If already a list of ints, return as-is
         if isinstance(value, list) and all(isinstance(v, int) for v in value):

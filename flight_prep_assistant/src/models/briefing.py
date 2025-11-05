@@ -1,3 +1,4 @@
+import datetime
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -28,6 +29,10 @@ class BriefingModel(BaseModel):
     """
 
     briefing_id: UUID = Field(default_factory=uuid4, description="Unique briefing ID.")
+    timestamp: datetime.datetime = Field(
+        default_factory=datetime.datetime.now,
+        description="Briefing timestamp."
+    )
     aircraft: AircraftModel = Field(
         description="Information about the aircraft used for the flight."
     )
