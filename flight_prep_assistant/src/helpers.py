@@ -149,3 +149,19 @@ def submit_final_recommendation(departure: str, arrival: str) -> str:
         return "GO VFR"
 
     return "GO IFR"
+
+
+def remove_duplicates_elements(value: list) -> list:
+    """
+    Remove duplicate elements from a list while preserving the original order.
+
+    This function uses a dictionary to maintain insertion order and eliminate
+    repeated items efficiently. The first occurrence of each element is kept.
+
+    Args:
+        value (list): The input list that may contain duplicate elements.
+
+    Returns:
+        list: A new list containing only unique elements in their original order.
+    """
+    return list(dict.fromkeys(value))
