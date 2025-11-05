@@ -1,4 +1,3 @@
-import re
 import time
 from functools import wraps
 from logging import getLogger
@@ -30,7 +29,7 @@ def get_input() -> InputData:
         takeoff_distance_at_sea_level=int(input("Takeoff distance at sea level: ")),
         landing_distance_at_sea_level=int(input("Landing distance at sea level: ")),
         stall_speed=int(input("Stall speed: ")),
-        xwind_max_speed=float(input("Max crosswind speed: ")),
+        crosswind_max_speed=float(input("Max crosswind speed: ")),
     )
 
     return InputData(
@@ -73,26 +72,6 @@ def get_time(func):
     return inner
 
 
-def convert_to_int(runways_direction: list[str]) -> set[int]:
-    """
-    Convert a list of runway direction strings into a set of integers.
-    Handles letters, slashes, empty items, and logs the result.
-    """
-    converted = set()
-    for rwy in runways_direction:
-        try:
-            nums = re.findall(
-                pattern=r"\d+",
-                string=rwy)
-            if nums:
-                converted.add(int(nums[0]))
-        except Exception as e:
-            logger.warning(f"Skipping invalid runway entry '{rwy}': {e}")
-
-    logger.info(f"Runways extracted, converted to integers: {converted}")
-    return converted
-
-
 def convert_to_tas(ias: float, density_ratio: float) -> int:
     """
     Convert indicated airspeed (IAS) to true airspeed (TAS) given the air density.
@@ -115,13 +94,58 @@ def convert_to_tas(ias: float, density_ratio: float) -> int:
     return round(ias / sqrt(density_ratio))
 
 
-def is_within_limits():
-    pass
+def is_greater(value: int, limit: int) -> bool:
+    """
+    Check if a given value exceeds a specified limit.
+
+    Args:
+        value (int): The value to compare.
+        limit (int): The threshold to compare against.
+
+    Returns:
+        bool: True if the value is greater than the limit, otherwise False.
+    """
+    return value > limit
 
 
 def is_not_pydantic_model(*models) -> bool:
+    """
+    Determine whether any of the provided objects are not Pydantic models.
+
+    Args:
+        *models: One or more objects to check.
+
+    Returns:
+        bool: True if at least one object does not implement the 'model_dump' method
+        (i.e., is not a Pydantic model); False if all are Pydantic models.
+    """
     return not all(hasattr(model, "model_dump") for model in models)
 
 
-def is_not_valid_icao_code(icao: str, pattern: str = r"^[A-Za-z]{4}$") -> bool:
-    return not re.fullmatch(pattern=pattern, string=icao)
+def submit_final_recommendation(departure: str, arrival: str) -> str:
+    """
+    Determine the final flight recommendation based on departure and arrival conditions.
+
+    Args:
+        departure (str): The recommendation for the departure airfield (e.g., "GO VFR", "GO IFR", "NO GO").
+        arrival (str): The recommendation for the arrival airfield.
+
+    Returns:
+        str: The final combined recommendation:
+            - "NO GO" if either location is not suitable for flight.
+            - "GO IFR" if both require IFR, or if conditions differ.
+            - "GO VFR" only if both are suitable for VFR.
+    """
+    departure_recommendation = departure
+    arrival_recommendation = arrival
+
+    if departure_recommendation == "NO GO" or arrival_recommendation == "NO GO":
+        return "NO GO"
+
+    if departure_recommendation == "GO IFR" and arrival_recommendation == "GO IFR":
+        return "GO IFR"
+
+    if departure_recommendation == "GO VFR" and arrival_recommendation == "GO VFR":
+        return "GO VFR"
+
+    return "GO IFR"
