@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -22,12 +23,13 @@ from weasyprint import HTML
 from flight_prep_assistant.src.constants import (GRAVITY_FACTOR, TEMP_CORRECTION_FACTOR, FT_PER_HPA_CONVERSION_FACTOR,
                                                  KNOTS_FACTOR, HEIGHT_APPROXIMATION, CALIBRATED_TAKEOFF_FACTOR,
                                                  CALIBRATED_LANDING_FACTOR, INHG_TO_HPA_FACTOR, QNH_STD,
-                                                 TEMP_LAPSE_RATE_PER_FOOT_ALT, SEA_LEVEL_STD_TEMP)
+                                                 TEMP_LAPSE_RATE_PER_FOOT_ALT, SEA_LEVEL_STD_TEMP,
+                                                 STATUE_MILE_TO_METERS)
 from flight_prep_assistant.src.enums import BriefingStatus, StallSpeedFactor
-from flight_prep_assistant.src.helpers import (is_not_pydantic_model, convert_to_int,
-                                               convert_to_tas, get_time)
+from flight_prep_assistant.src.helpers import is_not_pydantic_model, convert_to_tas, get_time, is_greater, \
+    submit_final_recommendation
 from flight_prep_assistant.src.models import AircraftModel, AirfieldModel, BriefingModel, ApiParams, AirfieldParams, \
-    RunwayModel, WindModel, FrequencyModel, InputData
+    RunwayModel, WindModel, FrequencyModel, InputData, RecommendationBaseModel
 
 load_dotenv()
 
@@ -93,98 +95,46 @@ class AircraftOpsCalculator:
         self.airfield_data = airfield_data
 
         # --- Aircraft data ---
-        self.landing_distance_at_sea_level: int = int(self.aircraft_data.landing_distance_at_sea_level)
-        self.xwind_max_speed: float = float(self.aircraft_data.xwind_max_speed)
+        self.crosswind_max_speed: int = int(self.aircraft_data.crosswind_max_speed)
         self.stall_speed: int = int(self.aircraft_data.stall_speed)
 
         # --- Airfield data ---
         self.wind: WindModel = self.airfield_data.wind
 
-        # --- Handle and normalize wind speed
-        try:
-            self.wind.speed
-        except (TypeError, ValueError):
-            self.wind.speed = 0.0
-
-        # --- Handle and normalize wind direction
-        if isinstance(self.wind.direction, str):
-            if self.wind.direction.strip().upper() in {"VRB", "CALM", "VAR", ""}:
-                self.wind.direction = 0
-            else:
-                try:
-                    self.wind.direction
-                except ValueError:
-                    self.wind.direction = 0
-
-        self.wind.direction %= 360
-
         # --- Parse runways direction ---
-        self.runways_direction: set[int] = convert_to_int(self.get_runways_direction())
+        self.runways_direction = [direction for runway in self.airfield_data.runway for direction in runway.direction]
 
-    def get_runways_direction(self) -> list[str]:
+    def calculate_crosswind_speed(self) -> list[int]:
         """
-        Retrieve and parse runway direction data from the airfield information.
+        Calculate the crosswind component of the wind for each runway.
 
-        Returns:
-            list[str]: A list of runway direction identifiers (e.g., ['09', '27']).
-
-        Raises:
-            RuntimeError: If runway direction data cannot be retrieved or parsed correctly.
-        """
-        runways = self.airfield_data.runway
-        try:
-            runways_direction = [direction
-                                 for runway in runways
-                                 for direction in runway.direction.split('/')
-                                 ]
-
-            return runways_direction
-
-        except KeyError as err:
-            logger.error(f"Failed to get runways directions | Error: {err}.")
-            raise RuntimeError("Failed to get runways directions. Check runways data format.") from err
-
-    def calculate_xwind_speed(self) -> list[float]:
-        """
-        Calculate the crosswind (perpendicular) component of the wind for each runway.
-
-        The crosswind is computed as:
+        The crosswind (perpendicular) component is computed as:
             crosswind = wind_speed * sin(wind_direction - runway_direction * 10)
 
         Returns:
-            list[float]: List of crosswind speeds (in the same units as the input wind speed)
-                         for each runway direction, rounded to one decimal place.
+            list[int]: Crosswind speeds (same units as wind speed) for each
+            runway direction, rounded to one decimal place.
         """
-        runways_directions = self.runways_direction
-
-        # --- Calculations ---
-        xwind_speeds = [
-            round(self.wind.speed * (sin(radians(self.wind.direction - runway_direction * 10))), 1)
-            for runway_direction in runways_directions
+        return [
+            round(self.wind.speed * (sin(radians(self.wind.direction - runway_direction * 10))))
+            for runway_direction in self.runways_direction
         ]
-
-        return xwind_speeds
 
     def calculate_headwind_speed(self) -> list[float]:
         """
-        Calculate the headwind (parallel) component of the wind for each runway.
+        Calculate the headwind component of the wind for each runway.
 
-        The headwind is computed as:
+        The headwind (parallel) component is computed as:
             headwind = wind_speed * cos(wind_direction - runway_direction * 10)
 
         Returns:
-            list[float]: List of headwind speeds (in the same units as the input wind speed)
-                         for each runway direction, rounded to one decimal place.
+            list[float]: Headwind speeds (same units as wind speed) for each
+            runway direction, rounded to one decimal place.
         """
-        runways_directions = self.runways_direction
-
-        # --- Calculations ---
-        headwinds_speed = [
+        return [
             round(self.wind.speed * (cos(radians(self.wind.direction - runway_direction * 10))), 1)
-            for runway_direction in runways_directions
+            for runway_direction in self.runways_direction
         ]
-
-        return headwinds_speed
 
     def calculate_density_altitude(self) -> int:
         """
@@ -241,7 +191,7 @@ class AircraftOpsCalculator:
             self,
             stall_speed_factor: StallSpeedFactor,
             surface_factor: float = 1.0,
-            safety_factor: float = 0.0
+            safety_factor: float = 1.0
     ) -> list[int]:
         """
         Calculates the required runway distance for takeoff or landing.
@@ -261,23 +211,20 @@ class AircraftOpsCalculator:
 
         required_speed = self.stall_speed * stall_speed_factor.value
         true_airspeed = convert_to_tas(required_speed, density_ratio)
-        ground_speeds = [(true_airspeed - wind_speed) * KNOTS_FACTOR for wind_speed in wind_speeds]
+        ground_speeds = [max((true_airspeed - wind_speed) * KNOTS_FACTOR, 0) for wind_speed in wind_speeds]
 
         # --- Choose formula based on operation type ---
-        surface_factor = surface_factor
-        safety_factor = safety_factor
-
         if stall_speed_factor == StallSpeedFactor.TAKEOFF:
-            factor = CALIBRATED_TAKEOFF_FACTOR * density_ratio - surface_factor
+            factor = CALIBRATED_TAKEOFF_FACTOR * density_ratio
             phase = "takeoff"
         else:
-            factor = surface_factor + CALIBRATED_LANDING_FACTOR * density_ratio
+            factor = CALIBRATED_LANDING_FACTOR * density_ratio
             phase = "landing"
 
         # --- Compute required runway distance ---
         runway_distance = [
             round(
-                ((ground_speed ** 2) / (2 * GRAVITY_FACTOR * factor)) * safety_factor
+                ((ground_speed ** 2) / (2 * GRAVITY_FACTOR * factor)) * surface_factor * safety_factor
             )
             for ground_speed in ground_speeds
         ]
@@ -285,14 +232,195 @@ class AircraftOpsCalculator:
 
         return runway_distance
 
-    def check_visibility(self) -> int:
-        pass
+    def parse_visibility(self) -> int:
+        """
+        Parse and return the current visibility from the METAR report in meters.
 
-    def check_cloud_base(self) -> int:
-        pass
+        This method extracts visibility information from the airfield's METAR string.
+        It supports both ICAO (meter-based) and U.S. (statute miles, "SM") formats,
+        and normalizes special codes like "CAVOK" or "9999" to 10,000 meters.
+
+        Returns:
+            int: The visibility in meters, rounded to the nearest 100 meters.
+                 Returns 10,000 if conditions indicate unrestricted visibility
+                 (e.g., "CAVOK" or "9999" in the METAR).
+
+        Raises:
+            ValueError: If no valid visibility data can be parsed from the METAR.
+        """
+        metar = self.airfield_data.metar.upper()
+
+        if "CAVOK" in metar:
+            return 10_000
+
+        pattern = r"\b(\d{4})\b"
+        match = re.search(pattern, metar)
+        if match:
+            value = int(match.group(1))
+            if value == 9999:
+                return 10_000
+
+            return value
+
+        match_sm = re.search(r"(\d+\s\d/\d|\d+/\d|\d+)\s?SM", metar)
+        if match_sm:
+            sm_str = match_sm.group(1).strip()
+            # Convert fractional SM to float
+            if " " in sm_str:
+                # e.g. "1 1/2"
+                whole, fraction = sm_str.split()
+                num, den = map(int, fraction.split("/"))
+                value_sm = int(whole) + num / den
+            elif "/" in sm_str:
+                num, den = map(int, sm_str.split("/"))
+                value_sm = num / den
+            else:
+                value_sm = float(sm_str)
+
+            value_m = int(round(value_sm * STATUE_MILE_TO_METERS, -2))
+            if value_m > 9999:
+                return 10_000
+
+            return value_m
+
+        raise ValueError("Unable to parse visibility from METAR.")
+
+    def parse_cloud_base(self) -> int:
+        """
+        Parse and return the lowest cloud base from the METAR report in feet.
+
+        This method identifies all cloud layer entries in the METAR string
+        (e.g., 'FEW030', 'BKN100') and extracts their base altitudes.
+        It then returns the lowest layer, representing the ceiling height
+        relevant for flight condition evaluation.
+
+        Returns:
+            int: The lowest cloud base in feet. Defaults to 5,000 ft if no
+                 valid cloud layers are reported (e.g., 'CLR', 'NSC', or missing data).
+        """
+        # --- Get METAR ---
+        metar = self.airfield_data.metar.upper()
+        pattern = r"\b(?:FEW|SCT|BKN|OVC|VV|NSC|NSD|CLR)\d{0,3}\b"
+
+        # --- Finding all pattern matches in metar and retrieving only digits ---
+        matches = re.findall(pattern, metar)
+        cloud_bases = []
+        for match in matches:
+            digits = re.sub(r"\D", "", match)
+            if digits:
+                cloud_bases.append(int(digits) * 100)
+
+        if not cloud_bases:
+            return 5_000
+
+        # --- Returns the lowest cloud base layer ---
+        return min(cloud_bases)
 
     def submit_recommendation(self) -> Literal["NO GO", "GO IFR", "GO VFR"]:
-        pass
+        """
+        Evaluate airfield weather and aircraft performance conditions to issue a flight recommendation.
+
+        This method combines visibility, cloud base, and crosswind limitations to determine
+        whether operations are possible under VFR (Visual Flight Rules), IFR (Instrument Flight Rules),
+        or not permitted at all.
+
+        The logic follows these steps:
+            1. Parse current METAR data (visibility and cloud base).
+            2. Check VFR and IFR minima.
+            3. Verify if crosswind components exceed aircraft limits.
+            4. Return the appropriate operational recommendation.
+
+        Returns:
+            Literal["NO GO", "GO IFR", "GO VFR"]:
+                - "GO VFR" if VFR minima are met and crosswind limits are within range.
+                - "GO IFR" if only IFR minima are satisfied and crosswind limits are within range.
+                - "NO GO" if either minima are not met or crosswind limits are exceeded.
+        """
+        # --- Parse current visibility and cloud base ---
+        visibility = self.parse_visibility()
+        cloud_base = self.parse_cloud_base()
+        aircraft_max_crosswind_speed = self.crosswind_max_speed
+
+        # --- Verifying VMC conditions ---
+        vfr_visibility = is_greater(value=visibility, limit=5)
+        vfr_cloud_base = is_greater(value=cloud_base, limit=3000)
+
+        # --- Verifying IMC conditions ---
+        ifr_visibility = is_greater(value=visibility, limit=1)
+        ifr_cloud_base = is_greater(value=cloud_base, limit=500)
+
+        # --- Checking aircraft crosswind limits versus current crosswind speed ---
+        crosswind_speeds = self.calculate_crosswind_speed()
+        aircraft_crosswind_limit_exceeded = any(
+            [is_greater(value=crosswind_speed, limit=aircraft_max_crosswind_speed)
+             for crosswind_speed in crosswind_speeds]
+        )
+
+        # --- Verifying final conditions on the airfield ---
+        if vfr_visibility and vfr_cloud_base and not aircraft_crosswind_limit_exceeded:
+            logger.info("Recommendation: GO VFR.")
+            return "GO VFR"
+        elif ifr_visibility and ifr_cloud_base and not aircraft_crosswind_limit_exceeded:
+            logger.info("Recommendation: GO IFR.")
+            return "GO IFR"
+        else:
+            logger.info("Recommendation: NO GO.")
+            return "NO GO"
+
+
+class RecommendationModelBuilder:
+    """
+    Builds a `RecommendationBaseModel` instance using operational data and stall speed factors.
+
+    This class serves as a wrapper around `AircraftOpsCalculator` to compute and assemble
+    all the necessary flight condition parameters (e.g., runway data, wind components,
+    visibility, and cloud base) into a single, structured recommendation model.
+
+    Attributes:
+        ops_calc_data (AircraftOpsCalculator): An instance providing aircraft operational
+            calculations such as wind components and runway data.
+        stall_speed_factor (StallSpeedFactor): A factor used to adjust the required
+            runway distance based on aircraft stall speed characteristics.
+    """
+
+    def __init__(self, ops_calc_data: AircraftOpsCalculator, stall_speed_factor: StallSpeedFactor) -> None:
+        """
+        Initialize the RecommendationModelBuilder.
+
+        Args:
+            ops_calc_data (AircraftOpsCalculator): The operational calculator that
+                provides flight performance and weather-related data.
+            stall_speed_factor (StallSpeedFactor): The factor applied to compute
+                stall speed–related runway distance requirements.
+        """
+        self.ops_calc_data = ops_calc_data
+        self.stall_speed_factor = stall_speed_factor
+
+    def build(self) -> RecommendationBaseModel | None:
+        """
+        Construct a `RecommendationBaseModel` using calculated flight and weather parameters.
+
+        Returns:
+            RecommendationBaseModel | None: A populated recommendation model containing:
+                - `runway_direction` (list[int]): Available runway directions.
+                - `runway_distance` (float): Computed required landing or takeoff distance.
+                - `crosswind_speed` (list[float]): Calculated crosswind components.
+                - `headwind_speed` (list[float]): Calculated headwind components.
+                - `visibility` (float | str): Parsed current visibility at the airfield.
+                - `cloud_base` (float | str): Parsed current cloud base height.
+
+            Returns `None` if model construction cannot be completed.
+        """
+        return RecommendationBaseModel(
+            runway_direction=list(self.ops_calc_data.runways_direction),
+            runway_distance=self.ops_calc_data.calculate_required_runway_distance(
+                stall_speed_factor=self.stall_speed_factor
+            ),
+            crosswind_speed=self.ops_calc_data.calculate_crosswind_speed(),
+            headwind_speed=self.ops_calc_data.calculate_headwind_speed(),
+            visibility=self.ops_calc_data.parse_visibility(),
+            cloud_base=self.ops_calc_data.parse_cloud_base(),
+        )
 
 
 class Briefing:
@@ -315,6 +443,8 @@ class Briefing:
             self.aircraft = briefing_model.aircraft.model_dump()
             self.departure = briefing_model.departure_airfield.model_dump()
             self.arrival = briefing_model.arrival_airfield.model_dump()
+            self.departure_conditions = briefing_model.departure_conditions.model_dump()
+            self.arrival_conditions = briefing_model.arrival_conditions.model_dump()
             self.recommendation = briefing_model.recommendation
             self.html: Optional[HTML] = None
         except AttributeError as err:
@@ -336,6 +466,8 @@ class Briefing:
                 departure=self.departure,
                 arrival=self.arrival,
                 aircraft=self.aircraft,
+                departure_conditions=self.departure_conditions,
+                arrival_conditions=self.arrival_conditions,
                 recommendation=self.recommendation,
             )
 
@@ -501,24 +633,18 @@ class AirfieldModelBuilder:
             return None
         else:
             runways = self.airfield_records.get("runways", [])
+            parsed_runways = self._extract_runways(runways)
             frequencies = self.airfield_records.get("freqs")
             parsed_frequencies = self._extract_frequencies(frequencies)
 
             return AirfieldModel(
                 icaoId=self.airfield_records.get("icaoId", None),
-                runway=[
-                    RunwayModel(
-                        direction=runway.get("id", None),
-                        length=runway.get("dimension", None).split("x")[0],
-                        width=runway.get("dimension", None).split("x")[1],
-                        surface=runway.get("surface", None)[0],
-                    ).model_dump()
-                    for runway in runways
-                ],
+                runway=parsed_runways,
                 elevation=self.airfield_records.get("elev", None),
                 wind=WindModel(
                     direction=self.airfield_records.get("wdir", None),
-                    speed=self.airfield_records.get("wspd", None),
+                    speed=self.airfield_records.get("wspd"),
+                    gust=self.airfield_records.get("wgst", None)
                 ),
                 temperature=self.airfield_records.get("temp", None),
                 frequency=parsed_frequencies,
@@ -611,7 +737,6 @@ class BriefingGenerator:
         # --- Creating model builders instances ---
         departure_airfield_model_builder = AirfieldModelBuilder()
         arrival_airfield_model_builder = AirfieldModelBuilder()
-        # recommendation_model_builder = RecommendationModelBuilder()
 
         # --- Adding data to build airfield models ---
         departure_airfield_model_builder.add_airfield_data(
@@ -627,45 +752,44 @@ class BriefingGenerator:
             weather_api=self.weather_api, params=self.arrival_params
         )
 
-        # --- Building airfield and recommendation models ---
+        # --- Building airfield models ---
         departure_airfield = departure_airfield_model_builder.build()
         arrival_airfield = arrival_airfield_model_builder.build()
 
+        logger.info(f"Parsed runways of departure airfield: {departure_airfield.runway}")
+
+        # --- Building departure airfield data and recommendation model ---
         departure_airfield_ops_calculator = AircraftOpsCalculator(
             aircraft_data=self.data.aircraft_data,
             airfield_data=departure_airfield_model_builder.build())
-        logger.info(f"Departure airfield wind parameters: {departure_airfield_ops_calculator.wind}")
-        logger.info(
-            f"Departure airfield crosswind speed: {departure_airfield_ops_calculator.calculate_xwind_speed()} kt")
-        logger.info(
-            f"Departure airfield headwind speed: {departure_airfield_ops_calculator.calculate_headwind_speed()} kt")
-        logger.info(
-            f"Departure airfield density altitude: {departure_airfield_ops_calculator.calculate_density_altitude()} ft")
-        departure_airfield_ops_calculator.calculate_required_runway_distance(
+        departure_conditions = RecommendationModelBuilder(
+            ops_calc_data=departure_airfield_ops_calculator,
             stall_speed_factor=StallSpeedFactor.TAKEOFF,
-            surface_factor=1.0,
-            safety_factor=1.33,
-        )
+        ).build()
 
+        # --- Building arrival airfield data and recommendation model ---
         arrival_airfield_ops_calculator = AircraftOpsCalculator(
             aircraft_data=self.data.aircraft_data,
             airfield_data=arrival_airfield_model_builder.build())
-        logger.info(f"Arrival airfield wind parameters: {arrival_airfield_ops_calculator.wind}")
-        logger.info(f"Arrival airfield crosswind speed: {arrival_airfield_ops_calculator.calculate_xwind_speed()} kt")
-        logger.info(f"Arrival airfield headwind speed: {arrival_airfield_ops_calculator.calculate_headwind_speed()} kt")
-        logger.info(
-            f"Arrival airfield density altitude: {arrival_airfield_ops_calculator.calculate_density_altitude()} ft")
-        arrival_airfield_ops_calculator.calculate_required_runway_distance(
+        arrival_conditions = RecommendationModelBuilder(
+            ops_calc_data=arrival_airfield_ops_calculator,
             stall_speed_factor=StallSpeedFactor.LANDING,
-            surface_factor=1.0,
-            safety_factor=1.43,
-        )
+            ).build()
+
+        # --- Creating recommendations for departure and arrival airfield ---
+        departure_recommendation = departure_airfield_ops_calculator.submit_recommendation()
+        arrival_recommendation = arrival_airfield_ops_calculator.submit_recommendation()
 
         return BriefingModel(
             aircraft=self.data.aircraft_data,
             departure_airfield=departure_airfield,
             arrival_airfield=arrival_airfield,
-            recommendation="NO GO",
+            departure_conditions=departure_conditions,
+            arrival_conditions=arrival_conditions,
+            recommendation=submit_final_recommendation(
+                departure=departure_recommendation,
+                arrival=arrival_recommendation,
+            ),
         )
 
 
@@ -831,7 +955,7 @@ def download_briefing(request: Request, briefing_id: str) -> FileResponse:
         briefing_status.update({briefing_id: BriefingStatus.PENDING})
         logger.info(f"Briefing download requested | ID: {briefing_id} | Status: PENDING")
 
-        time.sleep(10)
+        time.sleep(1)
 
         # Update and log status: IN_PROGRESS
         briefing_status.update({briefing_id: BriefingStatus.IN_PROGRESS})
@@ -840,7 +964,7 @@ def download_briefing(request: Request, briefing_id: str) -> FileResponse:
         briefing = Briefing(briefing_model)
         briefing.render_briefing_html()
 
-        time.sleep(10)
+        time.sleep(1)
 
         # Update and log status: COMPLETE
         briefing_status.update({briefing_id: BriefingStatus.COMPLETE})
