@@ -1,4 +1,7 @@
-from pydantic import BaseModel, Field
+import re
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class ApiParams(BaseModel):
@@ -23,8 +26,21 @@ class AirfieldParams(ApiParams):
         taf (str): Whether to include TAF (Terminal Aerodrome Forecast) data in the response. Defaults to "true".
     """
 
-    ids: str = Field(description="The ICAO identifier of the airfield to query.")
+    ids: str = Field(pattern=r"^[a-zA-Z]{4}$", description="The ICAO identifier of the airfield to query.")
     taf: str = Field(default="true", description="Weather to include TAF.")
+
+    @field_validator("ids")
+    @classmethod
+    def validate_ids(cls, value):
+        return value.upper()
+
+    @field_validator("taf")
+    @classmethod
+    def validate_taf(cls, value):
+        if value not in {"true", "false"}:
+            raise ValueError("taf must be 'true' or 'false'")
+
+        return value
 
 
 class AircraftParams(ApiParams):
