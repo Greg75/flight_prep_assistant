@@ -1,6 +1,3 @@
-import re
-from typing import Literal
-
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -55,4 +52,4 @@ class AircraftParams(ApiParams):
     api_key: str = Field(
         description="The API key used for authentication and authorization."
     )
-    manufacturer: str = Field(description="The name of the aircraft manufacturer.")
+    manufacturer: str = Field(min_length=3, description="The name of the aircraft manufacturer.")
