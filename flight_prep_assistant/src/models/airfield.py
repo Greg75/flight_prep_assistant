@@ -93,8 +93,7 @@ class WindModel(BaseModel):
         speed (float | None): The wind speed in knots or meters per second.
     """
 
-    direction: int | str | None = Field(
-        default=None,
+    direction: int | str = Field(
         description="Direction from which wind is blowing or descriptive text.",
     )
     speed: int = Field(ge=0, description="Wind speed in knots.")
@@ -102,7 +101,10 @@ class WindModel(BaseModel):
 
     @field_validator("direction")
     @classmethod
-    def validate_direction(cls, value: int | str | None) -> int:
+    def validate_direction(cls, value: int | str) -> int:
+        if not isinstance(value, int) and not isinstance(value, str):
+            raise TypeError(f"Invalid wind direction: {value}.")
+
         if isinstance(value, str):
             if value.upper() in {"VRB", "CALM", "VAR", ""}:
                 return 0
