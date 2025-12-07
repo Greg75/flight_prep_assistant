@@ -90,6 +90,7 @@ class TestRunwayModel:
 class TestWindModel:
     """Test suite for validating the WindModel's handling of direction, speed, and gust fields."""
 
+    # --- Wind direction tests ---
     @pytest.mark.parametrize("payload", [
         pytest.param({"direction": 60, "speed": 10}, id="direction as int in range 0-360"),
         pytest.param({"direction": 420, "speed": 10}, id="direction as int exceeding range 0-360 once"),
@@ -100,6 +101,15 @@ class TestWindModel:
         wind_model = WindModel(**payload)
 
         assert wind_model.direction == 60
+
+    @pytest.mark.parametrize("payload", [
+        pytest.param({"direction": 0, "speed": 10}, id="int 0 as direction"),
+        pytest.param({"direction": "0", "speed": 10}, id="str 0 as direction"),
+    ])
+    def test_direction_zero_is_valid_and_returns_zero_for_int_and_string(self, payload):
+        wind_model = WindModel(**payload)
+
+        assert wind_model.direction == 0
 
     @pytest.mark.parametrize("payload", [
         pytest.param({"direction": "VRB", "speed": 10}, id="VRB returns 0"),
@@ -134,6 +144,7 @@ class TestWindModel:
         with pytest.raises(ValidationError):
             WindModel(**payload)
 
+    # --- Wind speed tests ---
     @pytest.mark.parametrize("payload", [
         pytest.param({"direction": 120, "speed": -10}, id="negative int"),
         pytest.param({"direction": 120, "speed": "-10"}, id="negative str"),
@@ -143,6 +154,7 @@ class TestWindModel:
         with pytest.raises(ValidationError):
             WindModel(**payload)
 
+    # --- Wind gust tests ---
     def test_gust_greater_than_speed_is_valid(self):
         """Verify that gust values greater than speed are accepted."""
         wind_model = WindModel(direction=120, speed=10, gust=12)
