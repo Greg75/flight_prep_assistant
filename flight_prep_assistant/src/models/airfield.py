@@ -99,11 +99,18 @@ class WindModel(BaseModel):
     speed: int = Field(ge=0, description="Wind speed in knots.")
     gust: int | None = Field(default=None, description="Wind gusts in knots.")
 
+    model_config = {
+        "strict": True
+    }
+
     @field_validator("direction")
     @classmethod
     def validate_direction(cls, value: int | str) -> int:
+        if isinstance(value, bool):
+            raise TypeError(f"Invalid data type of wind direction: {value}.")
+
         if not isinstance(value, int) and not isinstance(value, str):
-            raise TypeError(f"Invalid wind direction: {value}.")
+            raise TypeError(f"Invalid data type of wind direction: {value}.")
 
         if isinstance(value, str):
             if value.upper() in {"VRB", "CALM", "VAR", ""}:
