@@ -93,15 +93,15 @@ class WindModel(BaseModel):
         speed (float | None): The wind speed in knots or meters per second.
     """
 
+    model_config = {
+        "strict": True
+    }
+
     direction: int | str = Field(
         description="Direction from which wind is blowing or descriptive text.",
     )
     speed: int = Field(ge=0, description="Wind speed in knots.")
     gust: int | None = Field(default=None, description="Wind gusts in knots.")
-
-    model_config = {
-        "strict": True
-    }
 
     @field_validator("direction")
     @classmethod
