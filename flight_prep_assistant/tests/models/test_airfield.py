@@ -1,13 +1,15 @@
 import pytest
 from pydantic import ValidationError
 
-from flight_prep_assistant.src.models import RunwayModel, WindModel
+from flight_prep_assistant.src.models import RunwayModel, WindModel, FrequencyModel
 
 
 class TestRunwayModel:
+    """Tests validation and normalization logic of RunwayModel fields: direction, dimensions, and surface."""
 
     # --- Runway direction tests ---
     def test_runway_direction_is_none(self):
+        """Ensure direction defaults to None when not provided."""
         runway_model = RunwayModel()
 
         assert runway_model.direction is None
@@ -19,6 +21,7 @@ class TestRunwayModel:
         pytest.param({"direction": [9, 27]}, id="list_of_integers"),
     ])
     def test_runway_direction_valid_input_types(self, payload):
+        """Verify valid direction formats normalize to a numeric list."""
         runway_model = RunwayModel(**payload)
 
         assert runway_model.direction == [9, 27]
@@ -30,12 +33,13 @@ class TestRunwayModel:
         pytest.param({"direction": {"1": 1234, "2": 5678}}, id="dict_of_integers"),
     ])
     def test_runway_direction_invalid_input_types(self, payload):
-
+        """Ensure invalid direction types raise TypeError."""
         with pytest.raises(TypeError):
             RunwayModel(**payload)
 
     # --- Runway length and width tests ---
     def test_length_and_width_is_none(self):
+        """Ensure length and width default to None when not provided."""
         runway_model = RunwayModel()
 
         assert runway_model.length is None
@@ -47,6 +51,7 @@ class TestRunwayModel:
         pytest.param({"length": "1000ft", "width": "50 ft"}, id="strings_with_units"),
     ])
     def test_length_and_width_valid_input_types(self, payload):
+        """Validate numeric or unit-appended inputs normalize to integers."""
         runway_model = RunwayModel(**payload)
 
         assert runway_model.length == 1000
@@ -58,11 +63,13 @@ class TestRunwayModel:
         pytest.param({"length": "abcd", "width": "ef"}, ValueError, id="strings_no_digits"),
     ])
     def test_length_and_width_invalid_input_types(self, payload, expected_error):
+        """Ensure invalid length/width formats raise the expected error."""
         with pytest.raises(expected_error):
             RunwayModel(**payload)
 
     # --- Runway surface tests ---
     def test_surface_is_none(self):
+        """Ensure surface defaults to None when not provided."""
         runway_model = RunwayModel()
 
         assert runway_model.surface is None
@@ -73,6 +80,7 @@ class TestRunwayModel:
         pytest.param({"surface": "ASPHALT"}, id="uppercase"),
     ])
     def test_surface_valid_input_types(self, payload):
+        """Verify surface input is normalized to lowercase."""
         runway_model = RunwayModel(**payload)
 
         assert runway_model.surface == "asphalt"
@@ -83,6 +91,7 @@ class TestRunwayModel:
         pytest.param({"surface": " concrete "}, id="invalid_whitespaces"),
     ])
     def test_surface_invalid_input_types(self, payload):
+        """Ensure invalid surface formats raise ValidationError."""
         with pytest.raises(ValidationError):
             RunwayModel(**payload)
 
@@ -180,7 +189,53 @@ class TestWindModel:
 
 
 class TestFrequencyModel:
-    pass
+    """
+    Tests FrequencyModel behavior: whitespace stripping, None handling,
+    type validation, and acceptance of extra fields.
+    """
+
+    def test_frequency_model_accepts_valid_twr(self, frequency_model_fixture):
+        """Verify that a valid TWR frequency is accepted and preserved after validation."""
+        frequency_model = frequency_model_fixture
+
+        assert frequency_model.twr == "130.500"
+
+    def test_frequency_model_strips_whitespace_in_twr(self):
+        """Ensure leading and trailing whitespace in the TWR field is removed."""
+        frequency_model = FrequencyModel(twr=" 130.500 ")
+
+        assert frequency_model.twr == "130.500"
+
+    def test_frequency_model_allows_none_twr(self):
+        """Confirm that the TWR field can be set to None without raising validation errors."""
+        frequency_model = FrequencyModel(twr=None)
+
+        assert frequency_model.twr is None
+
+    @pytest.mark.parametrize("payload", [
+        pytest.param({"twr": 130.500}, id="frequency as an int"),
+        pytest.param({"twr": True}, id="frequency as a bool"),
+    ])
+    def test_frequency_model_rejects_invalid_field_types(self, payload):
+        """Validate that incorrect data types for the TWR field raise a ValidationError."""
+        with pytest.raises(ValidationError):
+            FrequencyModel(**payload)
+
+    def test_frequency_model_allows_extra_fields(self, frequency_model_fixture):
+        """Verify that the model accepts and preserves extra fields when extra='allow' is enabled."""
+        frequency_model = frequency_model_fixture.model_dump()
+
+        assert frequency_model["app"] == "120.500"
+        assert frequency_model["gnd"] == "110.500"
+
+
+@pytest.fixture
+def frequency_model_fixture():
+    """
+    Fixture providing a FrequencyModel instance that includes valid TWR data
+    and additional extra fields to test validation and extra field handling.
+    """
+    return FrequencyModel.model_validate({"twr": " 130.500 ", "app": "120.500", "gnd": " 110.500 "})
 
 
 class TestAirfieldModel:
