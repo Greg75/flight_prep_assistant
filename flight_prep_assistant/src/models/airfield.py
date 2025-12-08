@@ -93,9 +93,7 @@ class WindModel(BaseModel):
         speed (float | None): The wind speed in knots or meters per second.
     """
 
-    model_config = {
-        "strict": True
-    }
+    model_config = ConfigDict(strict=True)
 
     direction: int | str = Field(
         description="Direction from which wind is blowing or descriptive text.",
@@ -143,7 +141,24 @@ class FrequencyModel(BaseModel):
     @field_validator("twr")
     @classmethod
     def validate_twr_freq(cls, value: str | None) -> str | None:
-        return value.strip() if value else None
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value.strip()
+
+        raise ValueError(f"Invalid data type for TWR frequency field: {value}")
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_all_model_fields(cls, fields: dict) -> dict:
+        stripped_fields = {}
+        for key, value in fields.items():
+            if isinstance(value, str):
+                stripped_fields.update({key: value.strip()})
+            else:
+                stripped_fields.update({key: value})
+
+        return stripped_fields
 
 
 class AirfieldModel(BaseModel):
