@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from flight_prep_assistant.src.models import RunwayModel, WindModel, FrequencyModel
+from flight_prep_assistant.src.models import RunwayModel, WindModel, FrequencyModel, AirfieldModel
 
 
 class TestRunwayModel:
@@ -16,7 +16,7 @@ class TestRunwayModel:
 
     @pytest.mark.parametrize("payload", [
         pytest.param({"direction": "09/27"}, id="plain_string"),
-        pytest.param({"direction": "09L/27R"},  id="string_with_letters"),
+        pytest.param({"direction": "09L/27R"}, id="string_with_letters"),
         pytest.param({"direction": ["09", "27"]}, id="list_of_strings"),
         pytest.param({"direction": [9, 27]}, id="list_of_integers"),
     ])
@@ -239,4 +239,268 @@ def frequency_model_fixture():
 
 
 class TestAirfieldModel:
-    pass
+    """
+    Test suite validating the behavior, constraints, and normalization logic of the AirfieldModel.
+    The tests cover field-level validation, optional-field handling, numerical bounds, list validation,
+    nested model behavior, and correct initialization of the full model payload.
+    """
+
+    # --- ICAO ID validation ---
+    @pytest.mark.parametrize("payload", [
+        pytest.param({"icaoId": "EPKK"}, id="valid uppercase ICAO Id"),
+        pytest.param({"icaoId": " EPKK"}, id="uppercase ICAO Id with leading whitespace"),
+        pytest.param({"icaoId": " epkk "}, id="lowercase ICAO Id with leading and trailing whitespace"),
+    ])
+    def test_airfield_icao_valid_code_is_accepted(self, payload, airfield_model_fixture):
+        """
+        Verify that valid ICAO identifiers—including variations with whitespace and case differences—
+        are normalized and accepted by the AirfieldModel.
+        """
+        kwargs = airfield_model_fixture(**payload)
+        airfield_model = AirfieldModel(**kwargs)
+
+        assert airfield_model.icaoId == "EPKK"
+
+    @pytest.mark.parametrize("payload", [
+        pytest.param({"icaoId": ""}, id="empty ICAO Id"),
+        pytest.param({"icaoId": "ep12"}, id="invalid ICAO Id"),
+    ])
+    def test_airfield_icao_empty_string_raises_error(self, payload, airfield_model_fixture):
+        """
+        Ensure that invalid ICAO identifiers (e.g., empty strings or malformed codes)
+        trigger a validation error during model initialization.
+        """
+        with pytest.raises(ValidationError):
+            kwargs = airfield_model_fixture(**payload)
+            AirfieldModel(**kwargs)
+
+    # --- Runway List validation ---
+    @pytest.mark.parametrize("payload", [
+        pytest.param({"runway": []}, id="empty runway list"),
+    ])
+    def test_airfield_runway_list_empty_raises_error(self, payload, airfield_model_fixture):
+        """
+        Confirm that an empty runway list is rejected and results in a validation error,
+        as at least one runway entry is required.
+        """
+        with pytest.raises(ValidationError):
+            kwargs = airfield_model_fixture(**payload)
+            airfield_model = AirfieldModel(**kwargs)
+
+    def test_airfield_runway_valid_list_is_accepted(self, airfield_model_fixture):
+        """
+        Validate that a properly structured runway list is accepted and that all nested
+        runway attributes are correctly parsed and available.
+        """
+        kwargs = airfield_model_fixture()
+        airfield_model = AirfieldModel(**kwargs)
+
+        assert airfield_model.runway[0].direction == [9, 27]
+        assert airfield_model.runway[0].length == 9000
+        assert airfield_model.runway[0].width == 180
+        assert airfield_model.runway[0].surface == "asphalt"
+
+    # --- Elevation validation ---
+    def test_airfield_elevation_within_range_is_accepted(self, airfield_model_fixture):
+        """
+        Verify that elevation values within the defined range are accepted by the model.
+        """
+        kwargs = airfield_model_fixture()
+        airfield_model = AirfieldModel(**kwargs)
+
+        assert airfield_model.elevation == 240
+
+    @pytest.mark.parametrize("payload", [
+        pytest.param({"elevation": -1001}, id='elevation below minimum'),
+        pytest.param({"elevation": 15001}, id='elevation above maximum'),
+    ])
+    def test_airfield_elevation_exceeding_range_raises_error(self, payload, airfield_model_fixture):
+        """
+        Ensure that elevation values outside the allowed range cause a validation error.
+        """
+        with pytest.raises(ValidationError):
+            kwargs = airfield_model_fixture(**payload)
+            AirfieldModel(**kwargs)
+
+    @pytest.mark.parametrize("payload", [
+        pytest.param({"elevation": None}, id='elevation as None'),
+    ])
+    def test_airfield_elevation_none_is_allowed(self, payload, airfield_model_fixture):
+        """
+        Confirm that elevation may be set to None when the field is optional and that the
+        model accepts such input without error.
+        """
+        kwargs = airfield_model_fixture(**payload)
+        airfield_model = AirfieldModel(**kwargs)
+
+        assert airfield_model.elevation is None
+
+    # --- Temperature validation ---
+    @pytest.mark.parametrize("payload", [
+        pytest.param({"temperature": 20.1234}, id='temperature rounded to one decimal'),
+    ])
+    def test_airfield_temperature_is_rounded_to_one_decimal(self, payload, airfield_model_fixture):
+        """
+        Validate that temperature values are rounded to one decimal place according to
+        the model's data normalization rules.
+        """
+        kwargs = airfield_model_fixture(**payload)
+        airfield_model = AirfieldModel(**kwargs)
+
+        assert airfield_model.temperature == 20.1
+
+    @pytest.mark.parametrize("payload", [
+        pytest.param({"temperature": None}, id='temperature as None'),
+    ])
+    def test_airfield_temperature_none_is_allowed(self, payload, airfield_model_fixture):
+        """
+        Ensure that temperature may be assigned a None value when the field is optional
+        and that the model accepts this input without error.
+        """
+        kwargs = airfield_model_fixture(**payload)
+        airfield_model = AirfieldModel(**kwargs)
+
+        assert airfield_model.temperature is None
+
+    @pytest.mark.parametrize("payload", [
+        pytest.param({"temperature": -81}, id='temperature below minimum'),
+        pytest.param({"temperature": 61}, id='temperature above maximum'),
+    ])
+    def test_airfield_temperature_exceeding_range_raises_error(self, payload, airfield_model_fixture):
+        """
+        Confirm that temperature values falling outside the defined allowable range
+        result in a validation error.
+        """
+        with pytest.raises(ValidationError):
+            kwargs = airfield_model_fixture(**payload)
+            AirfieldModel(**kwargs)
+
+    # --- Wind, Frequency, METAR, TAF basic behavior validation ---
+    @pytest.mark.parametrize("payload", [
+        pytest.param({"wind": ""}, id='wind as empty string'),
+        pytest.param({"wind": None}, id='wind as None'),
+    ])
+    def test_airfield_wind_model_empty_or_none_raises_error(self, payload, airfield_model_fixture):
+        """
+        Ensure that the wind field rejects empty or null values when a valid nested
+        WindModel instance is required.
+        """
+        with pytest.raises(ValidationError):
+            kwargs = airfield_model_fixture(**payload)
+            AirfieldModel(**kwargs)
+
+    @pytest.mark.parametrize("payload", [
+        pytest.param({"frequency": ""}, id='frequency as empty string'),
+        pytest.param({"frequency": None}, id='frequency as None'),
+    ])
+    def test_airfield_frequency_model_empty_or_none_raises_error(self, payload, airfield_model_fixture):
+        """
+        Verify that the frequency field rejects empty or null values when a valid nested
+        FrequencyModel instance is required.
+        """
+        with pytest.raises(ValidationError):
+            kwargs = airfield_model_fixture(**payload)
+            AirfieldModel(**kwargs)
+
+    @pytest.mark.parametrize("payload", [
+        pytest.param({"metar": None}, id='metar as None'),
+    ])
+    def test_airfield_metar_optional_field_accepts_none(self, payload, airfield_model_fixture):
+        """
+        Confirm that the optional METAR field accepts None and initializes correctly.
+        """
+        kwargs = airfield_model_fixture(**payload)
+        airfield_model = AirfieldModel(**kwargs)
+
+        assert airfield_model.metar is None
+
+    @pytest.mark.parametrize("payload", [
+        pytest.param({"taf": None}, id='taf as None'),
+    ])
+    def test_airfield_taf_optional_field_accepts_none(self, payload, airfield_model_fixture):
+        """
+        Ensure that the optional TAF field accepts None and initializes correctly.
+        """
+        kwargs = airfield_model_fixture(**payload)
+        airfield_model = AirfieldModel(**kwargs)
+
+        assert airfield_model.taf is None
+
+    # --- Full model validation ---
+    def test_airfield_model_initializes_with_valid_data(self, airfield_model_fixture):
+        """
+        Validate that a complete and fully valid payload initializes the AirfieldModel
+        without raising validation errors and that all fields contain the expected values.
+        """
+        kwargs = airfield_model_fixture()
+        airfield_model = AirfieldModel(**kwargs)
+
+        assert airfield_model.icaoId == "EPKK"
+        assert airfield_model.runway[0].direction == [9, 27]
+        assert airfield_model.runway[0].length == 9000
+        assert airfield_model.runway[0].width == 180
+        assert airfield_model.runway[0].surface == "asphalt"
+        assert airfield_model.elevation == 240
+        assert airfield_model.wind.direction == 150
+        assert airfield_model.wind.speed == 12
+        assert airfield_model.wind.gust == 20
+        assert airfield_model.temperature == 12
+        assert airfield_model.frequency.twr == "120.500"
+        assert airfield_model.metar == "METAR EPKK 081630Z 10002KT 2000 BR OVC002 07/06 Q1015"
+        assert airfield_model.taf == "TAF EPKK 081430Z 0815/0915 08005KT 8000 OVC004"
+
+    @pytest.mark.parametrize("payload", [
+        pytest.param({"runway": []}, id='empty runway list'),
+        pytest.param({"wind": ""}, id='missing wind value'),
+        pytest.param({"frequency": ""}, id='missing frequency value'),
+    ])
+    def test_airfield_model_rejects_missing_required_fields(self, payload, airfield_model_fixture):
+        """
+        Confirm that missing or invalid required fields cause the AirfieldModel initialization
+        to fail with a validation error.
+        """
+        with pytest.raises(ValidationError):
+            kwargs = airfield_model_fixture(**payload)
+            AirfieldModel(**kwargs)
+
+
+@pytest.fixture
+def airfield_model_fixture():
+    """
+    Provide a factory that constructs a complete, valid base payload for initializing
+    an AirfieldModel instance. The fixture returns a callable that accepts arbitrary
+    field overrides, merges them with the predefined baseline attributes, and produces
+    a dictionary suitable for model instantiation.
+
+    This pattern enables individual tests to supply only the fields under examination
+    while relying on consistent, known-good defaults for all other required fields.
+
+    Returns:
+        Callable[..., dict]: A function that generates a fully populated AirfieldModel
+        payload with optional per-test overrides applied.
+    """
+    def _base_factory(**overrides):
+        base = {"icaoId": "EPKK",
+                "runway": [{
+                    "direction": [9, 27],
+                    "length": 9000,
+                    "width": 180,
+                    "surface": "asphalt",
+                }],
+                "elevation": 240,
+                "wind": {
+                    "direction": 150,
+                    "speed": 12,
+                    "gust": 20,
+                },
+                "temperature": 12,
+                "frequency": {
+                    "twr": "120.500"
+                },
+                "metar": "METAR EPKK 081630Z 10002KT 2000 BR OVC002 07/06 Q1015",
+                "taf": "TAF EPKK 081430Z 0815/0915 08005KT 8000 OVC004",
+                }
+        base.update(overrides)
+        return base
+
+    return _base_factory
