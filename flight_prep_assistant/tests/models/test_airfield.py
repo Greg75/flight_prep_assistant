@@ -285,7 +285,7 @@ class TestAirfieldModel:
         """
         with pytest.raises(ValidationError):
             kwargs = airfield_model_fixture(**payload)
-            airfield_model = AirfieldModel(**kwargs)
+            AirfieldModel(**kwargs)
 
     def test_airfield_runway_valid_list_is_accepted(self, airfield_model_fixture):
         """
