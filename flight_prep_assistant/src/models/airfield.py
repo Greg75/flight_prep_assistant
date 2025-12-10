@@ -152,11 +152,14 @@ class FrequencyModel(BaseModel):
     @classmethod
     def strip_all_model_fields(cls, fields: dict) -> dict:
         stripped_fields = {}
-        for key, value in fields.items():
-            if isinstance(value, str):
-                stripped_fields.update({key: value.strip()})
-            else:
-                stripped_fields.update({key: value})
+        if isinstance(fields, dict):
+            for key, value in fields.items():
+                if isinstance(value, str):
+                    stripped_fields.update({key: value.strip()})
+                else:
+                    stripped_fields.update({key: value})
+        else:
+            raise ValueError(f"Invalid data type for Frequency Model: {fields}.")
 
         return stripped_fields
 
