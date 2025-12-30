@@ -25,7 +25,7 @@ class AircraftModel(BaseModel):
         description="Required landing distance at sea level in ISA conditions."
     )
     stall_speed: int = Field(gt=0, description="Stall speed of the aircraft in knots.")
-    crosswind_max_speed: int = Field(
+    crosswind_max_speed: float = Field(
         gt=0,
         description="Maximum crosswind speed the aircraft can handle, in knots."
     )
