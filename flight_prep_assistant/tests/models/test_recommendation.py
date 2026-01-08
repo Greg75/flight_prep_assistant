@@ -1,5 +1,5 @@
 import pytest
-from pydantic_core._pydantic_core import ValidationError
+from pydantic import ValidationError
 
 from flight_prep_assistant.src.models import RecommendationBaseModel, RecommendationExtendModel, \
     RecommendationFinalModel
